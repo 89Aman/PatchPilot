@@ -625,24 +625,20 @@
         const domain = cfg.frontend_api || "clerk.noventra.org.in";
 
         if (!window.Clerk) {
-          if (!document.querySelector('script[src*="/npm/@clerk/ui"]')) {
-            const s1 = document.createElement("script");
-            s1.defer = true;
-            s1.crossOrigin = "anonymous";
-            s1.src = `https://${domain}/npm/@clerk/ui@1/dist/ui.browser.js`;
-            document.head.appendChild(s1);
-          }
-
           if (!document.querySelector('script[src*="/npm/@clerk/clerk-js"]')) {
             await new Promise((resolve) => {
-              const s2 = document.createElement("script");
-              s2.defer = true;
-              s2.crossOrigin = "anonymous";
-              s2.setAttribute("data-clerk-publishable-key", cfg.publishable_key);
-              s2.src = `https://${domain}/npm/@clerk/clerk-js@6/dist/clerk.browser.js`;
-              s2.onload = resolve;
-              s2.onerror = resolve;
-              document.head.appendChild(s2);
+              const s = document.createElement("script");
+              s.async = true;
+              s.crossOrigin = "anonymous";
+              s.setAttribute("data-clerk-publishable-key", cfg.publishable_key);
+              // Use clerk-js@5 which bundles prebuilt UI components out of the box
+              s.src = `https://${domain}/npm/@clerk/clerk-js@5/dist/clerk.browser.js`;
+              s.onload = resolve;
+              s.onerror = (e) => {
+                console.warn("Clerk CDN script failed to load (possible adblock):", e);
+                resolve();
+              };
+              document.head.appendChild(s);
             });
           }
         }
@@ -689,15 +685,15 @@
 
     async function handleClerkAuth() {
       if (clerkInstance) {
-        clerkInstance.openSignIn();
-      } else {
-        const modal = document.getElementById("clerkModal");
-        if (modal) {
-          modal.classList.remove("hidden");
-        } else {
-          window.location.href = "/auth/login";
+        try {
+          await clerkInstance.openSignIn();
+          return;
+        } catch (err) {
+          console.warn("Clerk openSignIn failed (blocked or headless):", err);
         }
       }
+      // Fallback to GitHub OAuth if Clerk or Clerk UI is blocked by client
+      window.location.href = "/auth/login";
     }
 
     async function checkAuthOnLanding() {
