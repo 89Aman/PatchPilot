@@ -53,7 +53,7 @@ templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("patchpilot")
 
-COMMAND_RE = re.compile(r"(?:@patchpilot|@contextlens|/lens)\s+(explain|fix)\b(.*)$", re.IGNORECASE | re.DOTALL)
+COMMAND_RE = re.compile(r"(?:@patchpilot[\w-]*|@contextlens[\w-]*|/lens|/patchpilot)\s+(explain|fix)\b(.*)$", re.IGNORECASE | re.DOTALL)
 
 
 @asynccontextmanager
