@@ -73,8 +73,8 @@ flowchart TD
 
     subgraph GitHubOutput ["GitHub Review Delivery"]
         BYOK -->|Categorized Scorecard & Inline Diffs| OutputEngine["Review Publisher"]
-        OutputEngine -->|POST /pulls/{id}/reviews| GitHubPR["Inline PR Reviews + Suggestions"]
-        OutputEngine -->|POST /comments/{id}/replies| GitHubReplies["Interactive @patchpilot Replies"]
+        OutputEngine -->|POST /pulls/:id/reviews| GitHubPR["Inline PR Reviews + Suggestions"]
+        OutputEngine -->|POST /comments/:id/replies| GitHubReplies["Interactive @patchpilot Replies"]
     end
 ```
 
