@@ -1,0 +1,346 @@
+{% extends "base.html" %}
+
+{% block title %}ContextLens — Credentials Vault Settings{% endblock %}
+
+{% block content %}
+<div class="max-w-4xl mx-auto px-4 sm:px-6 py-12">
+  <div class="mb-8">
+    <div class="flex items-center gap-2 text-xs font-semibold text-indigo-400 uppercase tracking-wider mb-2">
+      <a href="/" class="hover:underline text-slate-400">Home</a>
+      <span>&rsaquo;</span>
+      <span>Credentials Vault</span>
+    </div>
+    <h1 class="text-3xl font-extrabold text-white">🛡️ BYOK Credentials & Vault Settings</h1>
+    <p class="text-sm text-slate-400 mt-1">
+      Manage your LLM provider, model configuration, encrypted API keys, and repository review guidelines.
+    </p>
+  </div>
+
+  <div class="bg-slate-900/90 border border-slate-800 rounded-2xl shadow-2xl p-6 sm:p-8 space-y-6">
+    <!-- Owner & Admin Token -->
+    <div class="grid grid-cols-1 sm:grid-cols-2 gap-5 pb-6 border-b border-slate-800/80">
+      <div>
+        <label for="owner" class="block text-xs font-bold uppercase tracking-wider text-slate-300 mb-1.5">
+          GitHub Owner / Org <span class="text-red-400">*</span>
+        </label>
+        <div class="relative">
+          <input
+            id="owner"
+            type="text"
+            placeholder="e.g. 89Aman or my-org"
+            value="89Aman"
+            class="w-full bg-slate-950 border border-slate-700/80 rounded-xl px-3.5 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 transition"
+          />
+        </div>
+        <p class="text-[11px] text-slate-400 mt-1">Repository owner or organization name (case-insensitive).</p>
+      </div>
+
+      <div>
+        <label for="adminToken" class="block text-xs font-bold uppercase tracking-wider text-slate-300 mb-1.5">
+          Admin API Token <span class="text-red-400">*</span>
+        </label>
+        <input
+          id="adminToken"
+          type="password"
+          placeholder="Value of ADMIN_API_TOKEN"
+          class="w-full bg-slate-950 border border-slate-700/80 rounded-xl px-3.5 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 transition font-mono"
+        />
+        <p class="text-[11px] text-slate-400 mt-1">Required in <code class="text-indigo-300 font-mono">X-Admin-Token</code> header to protect vault endpoints.</p>
+      </div>
+    </div>
+
+    <!-- Provider & Model Selection -->
+    <div class="grid grid-cols-1 sm:grid-cols-2 gap-5">
+      <div>
+        <label for="provider" class="block text-xs font-bold uppercase tracking-wider text-slate-300 mb-1.5">
+          LLM Provider
+        </label>
+        <select
+          id="provider"
+          onchange="onProviderChange()"
+          class="w-full bg-slate-950 border border-slate-700/80 rounded-xl px-3.5 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500 transition"
+        >
+          <option value="gemini">Google Gemini (Gemini 2.5 Pro / Flash)</option>
+          <option value="openrouter">OpenRouter (Claude 3.7, DeepSeek, GPT-4o)</option>
+          <option value="groq">Groq Cloud (Llama 3.3, Qwen 2.5 Coder)</option>
+          <option value="grok">xAI Grok (Grok 3, Grok 3 Mini)</option>
+          <option value="openai">OpenAI (GPT-4o, GPT-4.1, o3-mini)</option>
+          <option value="ollama">Ollama (Local / Cloudflare Tunnel)</option>
+          <option value="custom">Custom OpenAI-Compatible Endpoint</option>
+        </select>
+      </div>
+
+      <div>
+        <label for="model" class="block text-xs font-bold uppercase tracking-wider text-slate-300 mb-1.5">
+          Model Identifier
+        </label>
+        <input
+          id="model"
+          type="text"
+          list="modelSuggestions"
+          placeholder="e.g. gemini-2.5-pro"
+          value="gemini-2.5-pro"
+          class="w-full bg-slate-950 border border-slate-700/80 rounded-xl px-3.5 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 transition font-mono"
+        />
+        <datalist id="modelSuggestions"></datalist>
+      </div>
+    </div>
+
+    <!-- API Key & Base URL -->
+    <div class="grid grid-cols-1 sm:grid-cols-2 gap-5">
+      <div>
+        <label for="apiKey" class="block text-xs font-bold uppercase tracking-wider text-slate-300 mb-1.5">
+          API Key <span id="keyHint" class="text-xs text-indigo-400 font-normal font-mono">(AES-256-GCM Encrypted)</span>
+        </label>
+        <input
+          id="apiKey"
+          type="password"
+          placeholder="Leave blank to retain existing key"
+          class="w-full bg-slate-950 border border-slate-700/80 rounded-xl px-3.5 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 transition font-mono"
+        />
+        <p class="text-[11px] text-slate-400 mt-1">Never shown in plaintext. Stored encrypted with unique nonce.</p>
+      </div>
+
+      <div>
+        <label for="baseUrl" class="block text-xs font-bold uppercase tracking-wider text-slate-300 mb-1.5">
+          Custom Base URL <span class="text-xs text-slate-400 font-normal">(Optional)</span>
+        </label>
+        <input
+          id="baseUrl"
+          type="text"
+          placeholder="e.g. https://ollama.my-tunnel.com/v1"
+          class="w-full bg-slate-950 border border-slate-700/80 rounded-xl px-3.5 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 transition font-mono"
+        />
+        <p class="text-[11px] text-slate-400 mt-1">Used for Cloudflare Tunnels, self-hosted Ollama, or proxies.</p>
+      </div>
+    </div>
+
+    <!-- Custom Review Policy -->
+    <div>
+      <div class="flex items-center justify-between mb-1.5">
+        <label for="reviewPolicy" class="text-xs font-bold uppercase tracking-wider text-slate-300">
+          Custom Review Policy (Markdown)
+        </label>
+        <div class="flex gap-2">
+          <button type="button" onclick="setPolicyPreset('standard')" class="text-[11px] text-slate-400 hover:text-indigo-400 transition">Standard</button>
+          <span class="text-slate-700">&bull;</span>
+          <button type="button" onclick="setPolicyPreset('security')" class="text-[11px] text-slate-400 hover:text-indigo-400 transition">Security Focused</button>
+          <span class="text-slate-700">&bull;</span>
+          <button type="button" onclick="setPolicyPreset('concise')" class="text-[11px] text-slate-400 hover:text-indigo-400 transition">Ultra Concise</button>
+        </div>
+      </div>
+      <textarea
+        id="reviewPolicy"
+        rows="7"
+        class="w-full bg-slate-950 border border-slate-700/80 rounded-xl p-3.5 text-xs text-slate-200 font-mono focus:outline-none focus:border-indigo-500 transition"
+      ></textarea>
+      <p class="text-[11px] text-slate-400 mt-1">Instructions prepended to every PR review and interactive /lens query prompt.</p>
+    </div>
+
+    <!-- Status Alert Box -->
+    <div id="alertBox" class="hidden rounded-xl p-4 text-xs font-mono whitespace-pre-wrap transition"></div>
+
+    <!-- Action Buttons -->
+    <div class="flex flex-wrap items-center justify-between gap-4 pt-4 border-t border-slate-800">
+      <button
+        type="button"
+        onclick="loadVault()"
+        class="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-200 transition"
+      >
+        🔄 Load Saved Config
+      </button>
+
+      <div class="flex items-center gap-3">
+        <button
+          type="button"
+          onclick="testConnection()"
+          class="px-5 py-2.5 rounded-xl bg-amber-600/90 hover:bg-amber-500 text-white text-xs font-semibold shadow-md shadow-amber-600/20 transition flex items-center gap-2"
+        >
+          <span>⚡</span> Test Model Connection
+        </button>
+
+        <button
+          type="button"
+          onclick="saveVault()"
+          class="px-6 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold shadow-md shadow-indigo-600/25 transition flex items-center gap-2"
+        >
+          <span>💾</span> Save Credentials
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const PRESET_MODELS = {
+    gemini: ["gemini-2.5-pro", "gemini-2.5-flash", "gemini-1.5-pro"],
+    openrouter: ["anthropic/claude-3.7-sonnet", "deepseek/deepseek-chat-v3-0324", "openai/gpt-4o", "x-ai/grok-3", "meta-llama/llama-3.3-70b-instruct"],
+    groq: ["llama-3.3-70b-versatile", "deepseek-r1-distill-llama-70b", "qwen-2.5-coder-32b"],
+    grok: ["grok-3", "grok-3-mini", "grok-2-latest"],
+    openai: ["gpt-4o", "gpt-4.1", "o3-mini"],
+    ollama: ["qwen2.5-coder:14b", "deepseek-coder-v2:16b", "llama3.1:8b"],
+    custom: []
+  };
+
+  const POLICY_PRESETS = {
+    standard: `# ContextLens Code Review Guidelines
+- Identify critical bugs, security vulnerabilities, memory/resource leaks, and edge-case exceptions.
+- Highlight performance bottlenecks or unnecessary redundant operations.
+- Flag breaking changes or deviations from repository architectural idioms.
+- Keep feedback objective, constructive, and directly actionable.`,
+    security: `# ContextLens Strict Security Review Policy
+- Scrutinize all user inputs, deserialization, SQL queries, and shell executions for injection vectors.
+- Enforce strict authentication, authorization, and secret redaction.
+- Require defense-in-depth sanitization and cryptographic integrity checks.
+- Flag any use of deprecated or insecure cryptographic primitives.`,
+    concise: `# ContextLens Concise Review Guidelines
+- Report bugs only. Ignore style, formatting, or minor nits.
+- Provide maximum 1 sentence explanation and exact replacement suggestion.`
+  };
+
+  function setPolicyPreset(name) {
+    if (POLICY_PRESETS[name]) {
+      document.getElementById("reviewPolicy").value = POLICY_PRESETS[name];
+    }
+  }
+
+  function showAlert(msg, isError = false) {
+    const box = document.getElementById("alertBox");
+    box.className = `rounded-xl p-4 text-xs font-mono whitespace-pre-wrap ${
+      isError ? "bg-red-950/70 border border-red-800 text-red-200" : "bg-emerald-950/70 border border-emerald-800 text-emerald-200"
+    }`;
+    box.textContent = msg;
+    box.classList.remove("hidden");
+  }
+
+  function onProviderChange() {
+    const provider = document.getElementById("provider").value;
+    const list = document.getElementById("modelSuggestions");
+    list.innerHTML = "";
+    (PRESET_MODELS[provider] || []).forEach(m => {
+      const opt = document.createElement("option");
+      opt.value = m;
+      list.appendChild(opt);
+    });
+    if (PRESET_MODELS[provider]?.length) {
+      document.getElementById("model").value = PRESET_MODELS[provider][0];
+    }
+  }
+
+  async function loadVault() {
+    const owner = document.getElementById("owner").value.trim();
+    const token = document.getElementById("adminToken").value.trim();
+    if (!owner) {
+      showAlert("Please enter a GitHub Owner username.", true);
+      return;
+    }
+    localStorage.setItem("cl_admin_token", token);
+    localStorage.setItem("cl_owner", owner);
+
+    try {
+      const res = await fetch(`/vault/${owner}`, {
+        headers: { "X-Admin-Token": token }
+      });
+      if (!res.ok) {
+        showAlert(`Failed to load config (${res.status}): ${await res.text()}`, true);
+        return;
+      }
+      const data = await res.json();
+      document.getElementById("provider").value = data.provider || "gemini";
+      onProviderChange();
+      document.getElementById("model").value = data.model || "gemini-2.5-pro";
+      document.getElementById("baseUrl").value = data.base_url || "";
+      document.getElementById("reviewPolicy").value = data.review_policy || POLICY_PRESETS.standard;
+      document.getElementById("keyHint").textContent = data.has_api_key ? "(Key saved in vault)" : "(No key saved yet)";
+      showAlert(`Loaded saved vault config for owner '${data.owner}'.`);
+    } catch (err) {
+      showAlert(`Network error: ${err}`, true);
+    }
+  }
+
+  async function saveVault() {
+    const owner = document.getElementById("owner").value.trim();
+    const token = document.getElementById("adminToken").value.trim();
+    if (!owner) {
+      showAlert("Please enter a GitHub Owner name.", true);
+      return;
+    }
+    if (!token) {
+      showAlert("Please enter your Admin API Token.", true);
+      return;
+    }
+    localStorage.setItem("cl_admin_token", token);
+    localStorage.setItem("cl_owner", owner);
+
+    const payload = {
+      provider: document.getElementById("provider").value,
+      model: document.getElementById("model").value.trim(),
+      api_key: document.getElementById("apiKey").value.trim(),
+      base_url: document.getElementById("baseUrl").value.trim() || null,
+      review_policy: document.getElementById("reviewPolicy").value
+    };
+
+    try {
+      const res = await fetch(`/vault/${owner}`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Admin-Token": token
+        },
+        body: JSON.stringify(payload)
+      });
+
+      if (!res.ok) {
+        showAlert(`Save failed (${res.status}): ${await res.text()}`, true);
+        return;
+      }
+      const data = await res.json();
+      document.getElementById("apiKey").value = "";
+      document.getElementById("keyHint").textContent = "(Key saved in vault)";
+      showAlert(`Success! Credentials for '${data.owner}' were encrypted with AES-256-GCM and saved to database.`);
+    } catch (err) {
+      showAlert(`Save error: ${err}`, true);
+    }
+  }
+
+  async function testConnection() {
+    const owner = document.getElementById("owner").value.trim();
+    const token = document.getElementById("adminToken").value.trim();
+    if (!owner || !token) {
+      showAlert("Please provide both Owner and Admin Token first.", true);
+      return;
+    }
+
+    // Save first to ensure latest API key is encrypted
+    await saveVault();
+
+    showAlert("Pinging configured model... Testing LLM endpoint response...");
+    try {
+      const res = await fetch(`/vault/${owner}/test`, {
+        method: "POST",
+        headers: { "X-Admin-Token": token }
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        showAlert(`Connection test failed: ${data.detail || JSON.stringify(data)}`, true);
+        return;
+      }
+      showAlert(`[Connection Verified!]\nProvider: ${data.provider}\nModel: ${data.model}\nModel Response: "${data.reply}"`);
+    } catch (err) {
+      showAlert(`Test error: ${err}`, true);
+    }
+  }
+
+  window.addEventListener("DOMContentLoaded", () => {
+    document.getElementById("adminToken").value = localStorage.getItem("cl_admin_token") || "";
+    document.getElementById("owner").value = localStorage.getItem("cl_owner") || "89Aman";
+    setPolicyPreset("standard");
+    onProviderChange();
+    if (document.getElementById("adminToken").value) {
+      loadVault();
+    }
+  });
+</script>
+{% endblock %}
