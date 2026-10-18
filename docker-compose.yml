@@ -1,0 +1,45 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: contextlens-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: contextlens
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d contextlens"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: contextlens-api
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/contextlens
+      MASTER_ENCRYPTION_KEY: ${MASTER_ENCRYPTION_KEY:-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef}
+      ADMIN_API_TOKEN: ${ADMIN_API_TOKEN:-super-secret-admin-token-change-me}
+      GITHUB_APP_ID: ${GITHUB_APP_ID:-123456}
+      GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET:-your_github_webhook_secret_here}
+      GITHUB_PRIVATE_KEY: ${GITHUB_PRIVATE_KEY:-""}
+      HOST: 0.0.0.0
+      PORT: 8080
+    env_file:
+      - path: .env
+        required: false
+
+volumes:
+  postgres_data:

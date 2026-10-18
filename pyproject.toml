@@ -1,0 +1,38 @@
+[project]
+name = "patchpilot"
+version = "0.2.0"
+description = "PatchPilot — Self-Hosted BYOK GitHub App and AI PR Review Engine"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "sqlalchemy[asyncio]>=2.0.36",
+    "asyncpg>=0.30.0",
+    "pydantic-settings>=2.6.0",
+    "cryptography>=43.0.0",
+    "pyjwt[crypto]>=2.9.0",
+    "httpx>=0.27.0",
+    "python-dotenv>=1.0.0",
+    "aiosqlite>=0.22.1",
+    "jinja2>=3.1.6",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.24.0",
+    "pytest-mock>=3.14.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = ["."]
