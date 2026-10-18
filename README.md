@@ -1,35 +1,60 @@
-# ✈️ PatchPilot
+<p align="center">
+  <img src="app/static/logo-text.png" alt="PatchPilot" width="280">
+</p>
 
-**PatchPilot** is a self-hosted, multi-provider, Bring-Your-Own-Key (BYOK) GitHub App and AI Pull Request review engine. Authenticate via GitHub OAuth, scope your repository installations, and securely store encrypted LLM credentials (Gemini, xAI Grok, Groq, OpenRouter, OpenAI, Ollama) in an isolated AES-256-GCM database vault.
+<p align="center">
+  <strong>Self-hosted, multi-provider Bring-Your-Own-Key (BYOK) GitHub App & AI Pull Request review engine.</strong>
+</p>
+
+<p align="center">
+  <a href="#how-it-works">How It Works</a> •
+  <a href="#interactive-pr-commands">PR Commands</a> •
+  <a href="#key-features">Key Features</a> •
+  <a href="#quick-start">Quick Start</a>
+</p>
+
+---
+
+**PatchPilot** automates GitHub pull request reviews with intelligent code analysis, line-accurate suggestions, and interactive chat commands. Bring your own API keys for Gemini, OpenAI, Anthropic (via OpenRouter), Groq, xAI Grok, or local Ollama — encrypted in your personal security vault.
+
+---
+
+## How It Works
+
+1. **Sign In**: Authenticate using your GitHub account on the PatchPilot dashboard.
+2. **Configure Your Vault**: Choose your preferred AI model provider and save your API key. Keys are encrypted at rest with AES-256-GCM.
+3. **Install the GitHub App**: Grant access to your repositories.
+4. **Get Automated Reviews**: When you open or update a PR, PatchPilot analyzes the git diff and leaves a categorized scorecard (`🔴 Bugs`, `🟡 Risks`, `🔵 Nits`) with one-click committable suggestions.
+
+---
+
+## Interactive PR Commands
+
+Mention PatchPilot in any PR review comment thread:
+
+| Command | Action | Example |
+| :--- | :--- | :--- |
+| `@patchpilot explain` | Explains the selected code lines, context, and rationale | `@patchpilot explain how this error handler works` |
+| `@patchpilot fix` | Generates a committable GitHub code suggestion to resolve issues | `@patchpilot fix handle the null case here` |
+
+> *Note: Mentions with custom bot suffixes like `@patchpilot-bot` or `@patchpilot-dev` are also supported.*
 
 ---
 
 ## Key Features
 
-- **Database & Security Vault (`app/db.py`, `app/crypto.py`)**:
-  - PostgreSQL / Supabase storage using async SQLAlchemy 2.0 with `asyncpg`.
-  - AES-256-GCM encryption with 12-byte random nonces and 32-byte master key.
-  - Strict per-user isolation keyed by GitHub username.
-- **GitHub OAuth & Repo Scoping (`app/github_auth.py`)**:
-  - GitHub OAuth authentication with signed `HttpOnly` JWT session cookies (`pyjwt`).
-  - Live inspection of repository scopes granted to PatchPilot.
-  - RS256 JWT App authentication and `X-Hub-Signature-256` HMAC webhook verification.
-- **Multi-Provider LLM Router (`app/llm.py`)**:
-  - Native endpoints for Gemini 2.5, xAI Grok, Groq Cloud, OpenRouter (Claude 3.7 / DeepSeek), OpenAI (GPT-4o), and local/tunnel Ollama instances.
-  - Unified git diff parsing with automatic lockfile noise filtering and exact right-side (`HEAD`) line numbering.
-- **Automated PR Reviews & Interactive Commands (`app/main.py`)**:
-  - Automated PR reviews with summary scorecards (`🔴 Bugs`, `🟡 Risks`, `🔵 Nits`) and line-accurate inline review comments.
-  - One-click committable GitHub ` ```suggestion ` blocks.
-  - Responds to `@patchpilot explain` and `@patchpilot fix` (as well as `/lens` and `@contextlens`) in review comment threads.
-- **Modern Dashboard & Settings (`app/ui.py`)**:
-  - Dark-mode Tailwind CSS interface with GitHub profile card, repository scope pill tags, provider dropdowns, encrypted key status badges, and model connection tester.
+- **Bring Your Own Key (BYOK)**: Connect your own LLM accounts. Supported providers include Google Gemini, OpenAI (GPT-4o), OpenRouter (Claude 3.7, DeepSeek), Groq Cloud, xAI Grok, and local/tunneled Ollama instances.
+- **Isolated AES-256-GCM Security Vault**: Your API keys and credentials are encrypted with 12-byte random nonces and isolated per GitHub account. Plaintext keys are never exposed in responses or logs.
+- **Actionable PR Scorecards**: Instant reviews with summary badges and right-side line-accurate inline review comments.
+- **One-Click Committable Suggestions**: Reviews include GitHub suggestion blocks (` ```suggestion `) that can be committed directly within GitHub.
+- **Modern Dark-Mode Dashboard**: View repository scopes, manage encrypted provider keys, test model connections in real time, and adjust review policies.
 
 ---
 
 ## Quick Start
 
 ### 1. Configure Environment
-Copy `.env.example` to `.env` and populate your secrets:
+Copy `.env.example` to `.env` and configure your credentials:
 ```bash
 cp .env.example .env
 ```
@@ -53,18 +78,6 @@ docker compose up -d
 
 ---
 
-## API Reference
-
-| Endpoint | Method | Description |
-| :--- | :--- | :--- |
-| `/` or `/dashboard` | `GET` | Main PatchPilot dashboard with OAuth identity card and vault settings |
-| `/health` | `GET` | Health check endpoint returning JSON `{"status": "ok"}` |
-| `/auth/login` | `GET` | Initiates GitHub OAuth authentication handshake |
-| `/auth/callback` | `GET` | Exchanges code for token, sets secure `patchpilot_session` cookie |
-| `/auth/logout` | `GET` | Clears user session cookie |
-| `/auth/me` | `GET` | Returns profile info for authenticated user |
-| `/api/user/repos` | `GET` | Lists repositories scoped to the authenticated user |
-| `/vault/{owner}` | `GET` | Retrieves vault metadata without exposing plaintext API keys |
-| `/vault/{owner}` | `PUT` | Upserts provider, model, encrypted API key, and review policy |
-| `/vault/{owner}/test` | `POST` | Executes live test ping against configured LLM model |
-| `/webhooks/github` | `POST` | GitHub App webhook receiver (HMAC-SHA256 verified) |
+<p align="center">
+  Made with lots of love by <a href="https://github.com/89Aman"><strong>89Aman</strong></a> for devs ❤️
+</p>

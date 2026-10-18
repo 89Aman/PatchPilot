@@ -14,8 +14,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   
   <!-- Tailwind CSS -->
   <script src="https://cdn.tailwindcss.com"></script>
-  <!-- Clerk JS SDK -->
-  <script async crossorigin="anonymous" src="https://cdn.jsdelivr.net/npm/@clerk/clerk-js@latest/dist/clerk.browser.js" type="text/javascript"></script>
   <script>
     tailwind.config = {
       darkMode: 'class',
@@ -574,13 +572,48 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       try {
         const res = await fetch("/auth/clerk/config");
         const cfg = await res.json();
-        if (cfg.publishable_key && window.Clerk) {
-          clerkInstance = window.Clerk;
-          const loadOptions = { publishableKey: cfg.publishable_key };
-          if (cfg.frontend_api) {
-            loadOptions.frontendApi = cfg.frontend_api;
+        if (!cfg.publishable_key) return;
+
+        const domain = cfg.frontend_api || "clerk.noventra.org.in";
+
+        if (!window.Clerk) {
+          if (!document.querySelector('script[src*="/npm/@clerk/ui"]')) {
+            const s1 = document.createElement("script");
+            s1.defer = true;
+            s1.crossOrigin = "anonymous";
+            s1.src = `https://${domain}/npm/@clerk/ui@1/dist/ui.browser.js`;
+            document.head.appendChild(s1);
           }
-          await clerkInstance.load(loadOptions);
+
+          if (!document.querySelector('script[src*="/npm/@clerk/clerk-js"]')) {
+            await new Promise((resolve) => {
+              const s2 = document.createElement("script");
+              s2.defer = true;
+              s2.crossOrigin = "anonymous";
+              s2.setAttribute("data-clerk-publishable-key", cfg.publishable_key);
+              s2.src = `https://${domain}/npm/@clerk/clerk-js@6/dist/clerk.browser.js`;
+              s2.onload = resolve;
+              s2.onerror = resolve;
+              document.head.appendChild(s2);
+            });
+          }
+        }
+
+        let attempts = 0;
+        while (!window.Clerk && attempts < 25) {
+          await new Promise(r => setTimeout(r, 100));
+          attempts++;
+        }
+
+        if (window.Clerk) {
+          clerkInstance = window.Clerk;
+          if (!clerkInstance.loaded) {
+            const loadOptions = { publishableKey: cfg.publishable_key };
+            if (cfg.frontend_api) {
+              loadOptions.frontendApi = cfg.frontend_api;
+            }
+            await clerkInstance.load(loadOptions);
+          }
           if (clerkInstance.user) {
             const token = await clerkInstance.session.getToken();
             await fetch("/auth/clerk/session", {

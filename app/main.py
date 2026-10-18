@@ -15,7 +15,8 @@ from fastapi import (
     status,
 )
 from pathlib import Path
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 import httpx
 from pydantic import BaseModel, Field
@@ -87,6 +88,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+STATIC_DIR = Path(__file__).resolve().parent / "static"
+if STATIC_DIR.exists():
+    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
 async def verify_admin_or_session(
@@ -173,12 +178,107 @@ async def health_check():
     return {"status": "ok", "app": "PatchPilot", "version": "0.2.0"}
 
 
-FAVICON_SVG = """<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%23f97316'/><path d='M8 20l16-8-8 16-2-6-6-2z' fill='%23ffffff'/></svg>"""
+@app.get("/robots.txt", include_in_schema=False)
+async def robots_txt():
+    """Serve robots.txt for search engine crawlers."""
+    content = (
+        "User-agent: *\n"
+        "Allow: /\n"
+        "Allow: /docs\n"
+        "Disallow: /vault/\n"
+        "Disallow: /api/\n"
+        "Disallow: /webhooks/\n"
+        "Sitemap: https://patchpilot.noventra.org.in/sitemap.xml\n"
+    )
+    return Response(content=content, media_type="text/plain")
+
+
+@app.get("/sitemap.xml", include_in_schema=False)
+async def sitemap_xml():
+    """Serve canonical sitemap.xml."""
+    content = (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
+        '  <url>\n'
+        '    <loc>https://patchpilot.noventra.org.in/</loc>\n'
+        '    <changefreq>weekly</changefreq>\n'
+        '    <priority>1.0</priority>\n'
+        '  </url>\n'
+        '  <url>\n'
+        '    <loc>https://patchpilot.noventra.org.in/docs</loc>\n'
+        '    <changefreq>weekly</changefreq>\n'
+        '    <priority>0.8</priority>\n'
+        '  </url>\n'
+        '</urlset>'
+    )
+    return Response(content=content, media_type="application/xml")
+
+
+FAVICON_SVG = """<svg xmlns="http://www.w3.org/2000/svg"
+     width="656" height="656" viewBox="184 184 656 656">
+  <defs>
+    <linearGradient id="orange" x1="0" y1="1" x2="1" y2="0">
+      <stop offset="0" stop-color="#ff6900"/>
+      <stop offset="1" stop-color="#ff9b00"/>
+    </linearGradient>
+
+    <linearGradient id="rim" x1="0" y1="1" x2="0.8" y2="0">
+      <stop offset="0" stop-color="#ff7910"/>
+      <stop offset="1" stop-color="#ffab10"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Orange rounded tile -->
+  <rect x="184" y="184" width="656" height="656" rx="164"
+        fill="url(#rim)"/>
+  <rect x="204" y="204" width="616" height="616" rx="145"
+        fill="url(#orange)"/>
+
+  <!-- Airplane -->
+  <path fill="#fffefa" d="
+    M 398 375
+    L 420 370
+    Q 434 366 445 376
+    L 553 466
+    L 611 450
+    C 635 442 653 452 660 469
+    C 667 489 653 507 633 514
+    L 410 574
+    Q 389 581 379 563
+    L 337 490
+    Q 331 479 343 474
+    L 364 468
+    Q 371 465 378 472
+    L 410 497
+    Q 418 504 430 500
+    L 467 490
+    L 393 392
+    Q 383 380 398 375
+    Z"/>
+
+  <!-- Runway -->
+  <rect x="360" y="625" width="292" height="31" rx="8"
+        fill="#fffefa"/>
+</svg>"""
 
 @app.get("/favicon.ico", include_in_schema=False)
+@app.get("/favicon.svg", include_in_schema=False)
 async def favicon():
-    """Serve SVG favicon."""
+    """Serve SVG favicon matching app/static/logo.svg."""
+    svg_file = STATIC_DIR / "logo.svg"
+    if svg_file.exists():
+        return FileResponse(svg_file, media_type="image/svg+xml")
     return Response(content=FAVICON_SVG, media_type="image/svg+xml")
+
+
+
+@app.get("/logo.png", include_in_schema=False)
+async def logo():
+    """Serve PatchPilot brand logo."""
+    logo_path = STATIC_DIR / "logo.png"
+    if logo_path.exists():
+        return FileResponse(logo_path, media_type="image/png")
+    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Logo not found")
 
 
 # -----------------------------------------------------------------------------

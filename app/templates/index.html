@@ -1,17 +1,61 @@
 <!DOCTYPE html>
 <html class="dark" lang="en">
+
 <head>
   <meta charset="utf-8" />
   <meta content="width=device-width, initial-scale=1.0" name="viewport" />
   <title>PatchPilot — AI Code Reviews for GitHub (BYOK & Self-Hosted)</title>
-  <link rel="icon" type="image/svg+xml" href="/favicon.ico" />
-  
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <link rel="alternate icon" href="/favicon.ico" />
+  <meta name="description"
+    content="PatchPilot is a self-hosted, multi-provider Bring-Your-Own-Key (BYOK) GitHub App and AI Pull Request review engine. Encrypted AES-256-GCM vault with Gemini, Claude, OpenAI, Groq, and Ollama support." />
+  <link rel="canonical" href="https://patchpilot.noventra.org.in/" />
+
+  <!-- Open Graph / Facebook -->
+  <meta property="og:type" content="website" />
+  <meta property="og:url" content="https://patchpilot.noventra.org.in/" />
+  <meta property="og:title" content="PatchPilot — AI Code Reviews for GitHub (BYOK & Self-Hosted)" />
+  <meta property="og:description"
+    content="Automate PR reviews with zero data retention and Bring-Your-Own-Key support for Gemini, Claude, OpenAI, and Groq." />
+  <meta property="og:image" content="https://patchpilot.noventra.org.in/logo.png" />
+  <meta property="og:site_name" content="PatchPilot" />
+
+  <!-- Twitter -->
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:url" content="https://patchpilot.noventra.org.in/" />
+  <meta name="twitter:title" content="PatchPilot — AI Code Reviews for GitHub (BYOK & Self-Hosted)" />
+  <meta name="twitter:description"
+    content="Automate PR reviews with zero data retention and Bring-Your-Own-Key support for Gemini, Claude, OpenAI, and Groq." />
+  <meta name="twitter:image" content="https://patchpilot.noventra.org.in/logo.png" />
+
+  <!-- Schema.org Structured Data -->
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "name": "PatchPilot",
+    "applicationCategory": "DeveloperApplication",
+    "operatingSystem": "Linux, macOS, Windows, Docker",
+    "description": "Self-hosted, multi-provider Bring-Your-Own-Key (BYOK) GitHub App and AI Pull Request review engine.",
+    "url": "https://patchpilot.noventra.org.in/",
+    "offers": {
+      "@type": "Offer",
+      "price": "0",
+      "priceCurrency": "USD"
+    }
+  }
+  </script>
+
   <!-- Fonts -->
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
-  <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet" />
-  
+  <link
+    href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap"
+    rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap"
+    rel="stylesheet" />
+
+
   <!-- Tailwind CSS -->
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
@@ -44,7 +88,7 @@
       }
     }
   </script>
-  
+
   <style>
     .material-symbols-outlined {
       font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 20;
@@ -53,29 +97,40 @@
       display: inline-block;
       vertical-align: middle;
     }
+
     .subtle-grid {
       background-size: 32px 32px;
       background-image: radial-gradient(circle, rgba(255, 255, 255, 0.06) 1px, transparent 1px);
     }
+
     .glow-accent {
       background: radial-gradient(circle at 50% 0%, rgba(249, 115, 22, 0.15) 0%, transparent 65%);
     }
   </style>
 </head>
+
 <body class="bg-dark-950 text-slate-100 font-sans antialiased subtle-grid selection:bg-brand-500 selection:text-white">
+
+  <!-- Accessibility Skip Link -->
+  <a href="#main-content"
+    class="sr-only focus:not-sr-only focus:fixed focus:top-3 focus:left-3 z-50 px-4 py-2 bg-brand-500 text-white rounded-lg text-xs font-semibold shadow-xl">
+    Skip to main content
+  </a>
 
   <!-- Navbar -->
   <header class="sticky top-0 z-50 backdrop-blur-xl bg-dark-950/80 border-b border-white/5">
     <div class="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">
-      
+
       <!-- Logo -->
       <a href="/" class="flex items-center gap-2.5 group">
-        <div class="w-8 h-8 rounded-lg bg-gradient-to-tr from-brand-600 to-amber-500 flex items-center justify-center text-white shadow-md shadow-brand-500/20 group-hover:scale-105 transition-transform">
+        <div
+          class="w-8 h-8 rounded-lg bg-gradient-to-tr from-brand-600 to-amber-500 flex items-center justify-center text-white shadow-md shadow-brand-500/20 group-hover:scale-105 transition-transform">
           <span class="material-symbols-outlined text-white">flight_takeoff</span>
         </div>
         <div class="flex items-center gap-2">
           <span class="font-display font-bold text-lg tracking-tight text-white">PatchPilot</span>
-          <span class="text-[11px] font-mono px-2 py-0.5 rounded-full bg-white/5 border border-white/10 text-slate-300">BYOK</span>
+          <span
+            class="text-[11px] font-mono px-2 py-0.5 rounded-full bg-white/5 border border-white/10 text-slate-300">BYOK</span>
         </div>
       </a>
 
@@ -88,11 +143,27 @@
 
       <!-- Right CTAs -->
       <div class="flex items-center gap-3">
-        <a href="https://github.com/89Aman/PatchPilot" target="_blank" rel="noreferrer" class="hidden sm:inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-white/10 text-xs font-medium text-slate-300 hover:text-white hover:bg-white/5 transition">
+        <a href="https://github.com/89Aman/PatchPilot" target="_blank" rel="noreferrer"
+          class="hidden sm:inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-white/10 text-xs font-medium text-slate-300 hover:text-white hover:bg-white/5 transition">
           <span class="material-symbols-outlined text-base">star</span>
           <span>GitHub</span>
         </a>
-        <a href="/dashboard" class="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-brand-500 hover:bg-brand-600 text-white font-display text-xs font-semibold shadow-lg shadow-brand-500/20 hover:shadow-brand-500/30 transition active:scale-95">
+
+        <!-- Unauthorized: Sign In with Clerk -->
+        <button id="navClerkBtn" type="button" onclick="handleClerkAuth()"
+          class="inline-flex items-center gap-2 px-4 py-2 rounded-2xl bg-indigo-600 hover:bg-indigo-500 text-white font-display text-xs font-semibold shadow-lg shadow-indigo-600/30 hover:shadow-indigo-600/40 transition-all duration-200 active:scale-95">
+          <svg class="w-4 h-4 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"
+            stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3.5" y="10.5" width="17" height="11" rx="3" ry="3"></rect>
+            <path d="M7 10.5V7a5 5 0 0 1 10 0v3.5"></path>
+            <circle cx="12" cy="16" r="1.2" fill="currentColor"></circle>
+          </svg>
+          <span>Sign In with Clerk</span>
+        </button>
+
+        <!-- Authorized: Go to Vault -->
+        <a id="navVaultBtn" href="/dashboard"
+          class="hidden inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-brand-500 hover:bg-brand-600 text-white font-display text-xs font-semibold shadow-lg shadow-brand-500/20 hover:shadow-brand-500/30 transition active:scale-95">
           <span>Go to Vault</span>
           <span class="material-symbols-outlined text-base">arrow_forward</span>
         </a>
@@ -101,293 +172,344 @@
     </div>
   </header>
 
-  <!-- Hero Section -->
-  <section class="relative pt-20 pb-16 px-6 glow-accent overflow-hidden">
-    <div class="max-w-4xl mx-auto text-center">
-      
-      <!-- Pill Badge -->
-      <div class="inline-flex items-center gap-2 px-3 py-1 mb-8 rounded-full bg-white/5 border border-white/10 text-xs font-medium text-slate-300">
-        <span class="w-2 h-2 rounded-full bg-brand-500 animate-pulse"></span>
-        <span>The Open-Source, BYOK Alternative to CodeRabbit</span>
-      </div>
+  <!-- Main Landmark -->
+  <main id="main-content">
 
-      <!-- Main Headline -->
-      <h1 class="text-4xl sm:text-6xl font-display font-extrabold text-white tracking-tight leading-[1.1] mb-6">
-        AI Code Reviews in seconds.<br />
-        <span class="text-transparent bg-clip-text bg-gradient-to-r from-brand-400 via-amber-400 to-amber-200">
-          Zero Data Leakage. Zero Fluff.
-        </span>
-      </h1>
+    <!-- Hero Section -->
+    <section class="relative pt-20 pb-16 px-6 glow-accent overflow-hidden">
+      <div class="max-w-4xl mx-auto text-center">
 
-      <!-- Subtitle -->
-      <p class="text-lg sm:text-xl text-slate-400 max-w-2xl mx-auto mb-10 leading-relaxed font-normal">
-        Automate your GitHub pull request reviews with Gemini 2.5, Claude 3.7, GPT-4o, and DeepSeek. Plug in your own keys with zero markup and 100% data custody.
-      </p>
-
-      <!-- Primary Buttons -->
-      <div class="flex flex-col sm:flex-row items-center justify-center gap-4 mb-14">
-        <a href="/dashboard" class="w-full sm:w-auto px-7 py-3.5 rounded-xl bg-brand-500 hover:bg-brand-600 text-white font-display font-semibold text-sm shadow-xl shadow-brand-500/25 transition active:scale-95 flex items-center justify-center gap-2">
-          <span class="material-symbols-outlined">key</span>
-          <span>Configure Your BYOK Vault</span>
-        </a>
-        <a href="/auth/login" class="w-full sm:w-auto px-6 py-3.5 rounded-xl border border-white/15 bg-white/5 hover:bg-white/10 text-white font-display font-semibold text-sm transition active:scale-95 flex items-center justify-center gap-2">
-          <span class="material-symbols-outlined">login</span>
-          <span>Sign In with GitHub</span>
-        </a>
-      </div>
-
-      <!-- Quick Trust Indicators -->
-      <div class="flex flex-wrap items-center justify-center gap-6 text-xs text-slate-400">
-        <div class="flex items-center gap-1.5">
-          <span class="material-symbols-outlined text-emerald-400 text-base">check_circle</span>
-          <span>AES-256-GCM Hardware Encrypted</span>
+        <!-- Pill Badge -->
+        <div
+          class="inline-flex items-center gap-2 px-3 py-1 mb-8 rounded-full bg-white/5 border border-white/10 text-xs font-medium text-slate-300">
+          <span class="w-2 h-2 rounded-full bg-brand-500 animate-pulse"></span>
+          <span>The Open-Source, BYOK Alternative to CodeRabbit</span>
         </div>
-        <div class="flex items-center gap-1.5">
-          <span class="material-symbols-outlined text-emerald-400 text-base">check_circle</span>
-          <span>No Training on Your Repos</span>
-        </div>
-        <div class="flex items-center gap-1.5">
-          <span class="material-symbols-outlined text-emerald-400 text-base">check_circle</span>
-          <span>Runs in Docker & Kubernetes</span>
-        </div>
-      </div>
 
-    </div>
-  </section>
+        <!-- Main Headline -->
+        <h1 class="text-4xl sm:text-6xl font-display font-extrabold text-white tracking-tight leading-[1.1] mb-6">
+          AI Code Reviews in seconds.<br />
+          <span class="text-transparent bg-clip-text bg-gradient-to-r from-brand-400 via-amber-400 to-amber-200">
+            Zero Data Leakage. Zero Fluff.
+          </span>
+        </h1>
 
-  <!-- Core Features Grid (No Fluff) -->
-  <section id="features" class="scroll-mt-20 max-w-6xl mx-auto px-6 py-16">
-    <div class="text-center mb-12">
-      <h2 class="text-xs font-mono uppercase tracking-wider text-brand-400 font-semibold mb-2">Why PatchPilot</h2>
-      <h3 class="text-2xl sm:text-3xl font-display font-bold text-white tracking-tight">
-        Engineered for speed, privacy, and cost control
-      </h3>
-    </div>
-
-    <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
-      
-      <!-- Card 1 -->
-      <div class="p-6 rounded-2xl bg-dark-900 border border-white/10 hover:border-brand-500/40 transition group">
-        <div class="w-10 h-10 rounded-xl bg-brand-500/10 border border-brand-500/20 text-brand-400 flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
-          <span class="material-symbols-outlined">key</span>
-        </div>
-        <h4 class="font-display font-bold text-white text-lg mb-2">True BYOK Independence</h4>
-        <p class="text-sm text-slate-400 leading-relaxed">
-          Never pay per-seat markups. Connect your existing Gemini, Claude, OpenAI, or Groq API keys directly to your self-hosted instance.
+        <!-- Subtitle -->
+        <p class="text-lg sm:text-xl text-slate-400 max-w-2xl mx-auto mb-10 leading-relaxed font-normal">
+          Automate your GitHub pull request reviews with your own cloud models. Plug in your own keys with zero markup
+          and 100% data custody.
         </p>
-      </div>
 
-      <!-- Card 2 -->
-      <div class="p-6 rounded-2xl bg-dark-900 border border-white/10 hover:border-brand-500/40 transition group">
-        <div class="w-10 h-10 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
-          <span class="material-symbols-outlined">lock</span>
+        <!-- Primary Buttons -->
+        <div class="flex flex-col sm:flex-row items-center justify-center gap-4 mb-14">
+          <a href="/dashboard"
+            class="w-full sm:w-auto px-7 py-3.5 rounded-xl bg-brand-500 hover:bg-brand-600 text-white font-display font-semibold text-sm shadow-xl shadow-brand-500/25 transition active:scale-95 flex items-center justify-center gap-2">
+            <span class="material-symbols-outlined">key</span>
+            <span>Configure Your BYOK Vault</span>
+          </a>
+          <a href="/auth/login"
+            class="w-full sm:w-auto px-6 py-3.5 rounded-xl border border-white/15 bg-white/5 hover:bg-white/10 text-white font-display font-semibold text-sm transition active:scale-95 flex items-center justify-center gap-2">
+            <span class="material-symbols-outlined">login</span>
+            <span>Sign In with GitHub</span>
+          </a>
         </div>
-        <h4 class="font-display font-bold text-white text-lg mb-2">Zero Data Retention</h4>
-        <p class="text-sm text-slate-400 leading-relaxed">
-          Diffs are decrypted in volatile RAM only during review execution and purged immediately. No training, no storage, no external logging.
-        </p>
-      </div>
 
-      <!-- Card 3 -->
-      <div class="p-6 rounded-2xl bg-dark-900 border border-white/10 hover:border-brand-500/40 transition group">
-        <div class="w-10 h-10 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-400 flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
-          <span class="material-symbols-outlined">tune</span>
-        </div>
-        <h4 class="font-display font-bold text-white text-lg mb-2">Custom Team Guidelines</h4>
-        <p class="text-sm text-slate-400 leading-relaxed">
-          Inject your own markdown review guidelines to enforce security standards, reject antipatterns, and check naming conventions automatically.
-        </p>
-      </div>
-
-    </div>
-  </section>
-
-  <!-- How It Works (3 Steps) -->
-  <section id="how-it-works" class="scroll-mt-20 max-w-5xl mx-auto px-6 py-16 border-t border-white/5">
-    <div class="text-center mb-12">
-      <h2 class="text-xs font-mono uppercase tracking-wider text-brand-400 font-semibold mb-2">Simple Setup</h2>
-      <h3 class="text-2xl sm:text-3xl font-display font-bold text-white tracking-tight">
-        Up and running in 3 minutes
-      </h3>
-    </div>
-
-    <div class="grid grid-cols-1 md:grid-cols-3 gap-8">
-      
-      <!-- Step 01: Connect Your Repos -->
-      <div class="rounded-2xl bg-dark-900 border border-white/10 p-6 flex flex-col justify-between space-y-5 hover:border-brand-500/30 transition">
-        <div class="space-y-3">
-          <div class="w-8 h-8 rounded-lg bg-white/5 border border-white/10 font-mono font-bold text-brand-400 flex items-center justify-center text-sm">
-            01
+        <!-- Quick Trust Indicators -->
+        <div class="flex flex-wrap items-center justify-center gap-6 text-xs text-slate-400">
+          <div class="flex items-center gap-1.5">
+            <span class="material-symbols-outlined text-emerald-400 text-base">check_circle</span>
+            <span>AES-256-GCM Hardware Encrypted</span>
           </div>
-          <h4 class="font-display font-bold text-white text-base">Connect Your Repos</h4>
-          <p class="text-xs text-slate-400 leading-relaxed">
-            Authorize your GitHub App on specific repositories or entire organizations with fine-grained read/write permissions.
+          <div class="flex items-center gap-1.5">
+            <span class="material-symbols-outlined text-emerald-400 text-base">check_circle</span>
+            <span>No Training on Your Repos</span>
+          </div>
+          <div class="flex items-center gap-1.5">
+            <span class="material-symbols-outlined text-emerald-400 text-base">check_circle</span>
+            <span>Runs in Docker & Kubernetes</span>
+          </div>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- Core Features Grid (No Fluff) -->
+    <section id="features" class="scroll-mt-20 max-w-6xl mx-auto px-6 py-16">
+      <div class="text-center mb-12">
+        <h2 class="text-xs font-mono uppercase tracking-wider text-brand-400 font-semibold mb-2">Why PatchPilot</h2>
+        <h3 class="text-2xl sm:text-3xl font-display font-bold text-white tracking-tight">
+          Engineered for speed, privacy, and cost control
+        </h3>
+      </div>
+
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+
+        <!-- Card 1 -->
+        <div class="p-6 rounded-2xl bg-dark-900 border border-white/10 hover:border-brand-500/40 transition group">
+          <div
+            class="w-10 h-10 rounded-xl bg-brand-500/10 border border-brand-500/20 text-brand-400 flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
+            <span class="material-symbols-outlined">key</span>
+          </div>
+          <h4 class="font-display font-bold text-white text-lg mb-2">True BYOK Independence</h4>
+          <p class="text-sm text-slate-400 leading-relaxed">
+            Never pay per-seat markups. Connect your existing Gemini, Claude, OpenAI, or Groq API keys directly to your
+            self-hosted instance.
           </p>
         </div>
 
-        <!-- Visual Mockup 1: GitHub App Scope -->
-        <div class="rounded-xl bg-dark-950 border border-white/5 p-3.5 space-y-2 font-mono text-[11px]">
-          <div class="flex items-center justify-between text-slate-500 border-b border-white/5 pb-2 text-[10px]">
-            <span class="flex items-center gap-1.5">
-              <span class="w-2 h-2 rounded-full bg-slate-700"></span>
-              <span class="w-2 h-2 rounded-full bg-slate-700"></span>
-              <span class="w-2 h-2 rounded-full bg-slate-700"></span>
-            </span>
-            <span>github-app/scope</span>
+        <!-- Card 2 -->
+        <div class="p-6 rounded-2xl bg-dark-900 border border-white/10 hover:border-brand-500/40 transition group">
+          <div
+            class="w-10 h-10 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
+            <span class="material-symbols-outlined">lock</span>
           </div>
-          <div class="space-y-1.5 pt-1">
-            <div class="flex items-center justify-between px-2.5 py-1.5 rounded-lg bg-white/5 border border-white/5">
-              <span class="text-slate-300 flex items-center gap-1.5">
-                <span class="material-symbols-outlined text-xs text-emerald-400">check</span>
-                <span>acme/core-api</span>
-              </span>
-              <span class="text-[9px] px-1.5 py-0.2 rounded bg-white/10 text-slate-400">private</span>
-            </div>
-            <div class="flex items-center justify-between px-2.5 py-1.5 rounded-lg bg-white/5 border border-white/5">
-              <span class="text-slate-300 flex items-center gap-1.5">
-                <span class="material-symbols-outlined text-xs text-emerald-400">check</span>
-                <span>acme/payment-worker</span>
-              </span>
-              <span class="text-[9px] px-1.5 py-0.2 rounded bg-white/10 text-slate-400">private</span>
-            </div>
-          </div>
-          <div class="pt-1 flex items-center justify-between text-[10px] text-emerald-400">
-            <span>● Webhook Listening</span>
-            <span class="text-slate-500">HMAC-SHA256</span>
-          </div>
-        </div>
-      </div>
-
-      <!-- Step 02: Deposit Provider Key -->
-      <div class="rounded-2xl bg-dark-900 border border-white/10 p-6 flex flex-col justify-between space-y-5 hover:border-brand-500/30 transition">
-        <div class="space-y-3">
-          <div class="w-8 h-8 rounded-lg bg-white/5 border border-white/10 font-mono font-bold text-brand-400 flex items-center justify-center text-sm">
-            02
-          </div>
-          <h4 class="font-display font-bold text-white text-base">Deposit Provider Key</h4>
-          <p class="text-xs text-slate-400 leading-relaxed">
-            Save your Gemini, Claude, Groq, or OpenAI key into your AES-256-GCM vault with your custom system review policy.
+          <h4 class="font-display font-bold text-white text-lg mb-2">Zero Data Retention</h4>
+          <p class="text-sm text-slate-400 leading-relaxed">
+            Diffs are decrypted in volatile RAM only during review execution and purged immediately. No training, no
+            storage, no external logging.
           </p>
         </div>
 
-        <!-- Visual Mockup 2: Hardware Vault Envelope -->
-        <div class="rounded-xl bg-dark-950 border border-white/5 p-3.5 space-y-2 font-mono text-[11px]">
-          <div class="flex items-center justify-between text-slate-500 border-b border-white/5 pb-2 text-[10px]">
-            <span class="text-brand-400 flex items-center gap-1">
-              <span class="material-symbols-outlined text-xs">lock</span>
-              <span>AES-256-GCM</span>
-            </span>
-            <span class="text-emerald-400">Hardware Sealed</span>
+        <!-- Card 3 -->
+        <div class="p-6 rounded-2xl bg-dark-900 border border-white/10 hover:border-brand-500/40 transition group">
+          <div
+            class="w-10 h-10 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-400 flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
+            <span class="material-symbols-outlined">tune</span>
           </div>
-          <div class="space-y-1.5 pt-1">
-            <div class="p-2 rounded-lg bg-white/5 border border-white/5 space-y-1">
-              <div class="flex items-center justify-between text-[10px] text-slate-400">
-                <span>ACTIVE MODEL</span>
-                <span class="text-brand-400">gemini-2.5-pro</span>
+          <h4 class="font-display font-bold text-white text-lg mb-2">Custom Team Guidelines</h4>
+          <p class="text-sm text-slate-400 leading-relaxed">
+            Inject your own markdown review guidelines to enforce security standards, reject antipatterns, and check
+            naming conventions automatically.
+          </p>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- How It Works (3 Steps) -->
+    <section id="how-it-works" class="scroll-mt-20 max-w-5xl mx-auto px-6 py-16 border-t border-white/5">
+      <div class="text-center mb-12">
+        <h2 class="text-xs font-mono uppercase tracking-wider text-brand-400 font-semibold mb-2">Simple Setup</h2>
+        <h3 class="text-2xl sm:text-3xl font-display font-bold text-white tracking-tight">
+          Up and running in 3 minutes
+        </h3>
+      </div>
+
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-8">
+
+        <!-- Step 01: Connect Your Repos -->
+        <div
+          class="rounded-2xl bg-dark-900 border border-white/10 p-6 flex flex-col justify-between space-y-5 hover:border-brand-500/30 transition">
+          <div class="space-y-3">
+            <div
+              class="w-8 h-8 rounded-lg bg-white/5 border border-white/10 font-mono font-bold text-brand-400 flex items-center justify-center text-sm">
+              01
+            </div>
+            <h4 class="font-display font-bold text-white text-base">Connect Your Repos</h4>
+            <p class="text-xs text-slate-400 leading-relaxed">
+              Authorize your GitHub App on specific repositories or entire organizations with fine-grained read/write
+              permissions.
+            </p>
+          </div>
+
+          <!-- Visual Mockup 1: GitHub App Scope -->
+          <div class="rounded-xl bg-dark-950 border border-white/5 p-3.5 space-y-2 font-mono text-[11px]">
+            <div class="flex items-center justify-between text-slate-500 border-b border-white/5 pb-2 text-[10px]">
+              <span class="flex items-center gap-1.5">
+                <span class="w-2 h-2 rounded-full bg-slate-700"></span>
+                <span class="w-2 h-2 rounded-full bg-slate-700"></span>
+                <span class="w-2 h-2 rounded-full bg-slate-700"></span>
+              </span>
+              <span>github-app/scope</span>
+            </div>
+            <div class="space-y-1.5 pt-1">
+              <div class="flex items-center justify-between px-2.5 py-1.5 rounded-lg bg-white/5 border border-white/5">
+                <span class="text-slate-300 flex items-center gap-1.5">
+                  <span class="material-symbols-outlined text-xs text-emerald-400">check</span>
+                  <span>acme/core-api</span>
+                </span>
+                <span class="text-[9px] px-1.5 py-0.2 rounded bg-white/10 text-slate-400">private</span>
               </div>
-              <div class="text-[10px] text-slate-300 truncate">
-                key: ••••••••••••••••AIzaSy98F
+              <div class="flex items-center justify-between px-2.5 py-1.5 rounded-lg bg-white/5 border border-white/5">
+                <span class="text-slate-300 flex items-center gap-1.5">
+                  <span class="material-symbols-outlined text-xs text-emerald-400">check</span>
+                  <span>acme/payment-worker</span>
+                </span>
+                <span class="text-[9px] px-1.5 py-0.2 rounded bg-white/10 text-slate-400">private</span>
               </div>
             </div>
-          </div>
-          <div class="pt-1 flex items-center justify-between text-[10px]">
-            <span class="text-slate-500">Nonce: 96-bit Unique</span>
-            <span class="text-emerald-400 font-medium">0ms Retention</span>
-          </div>
-        </div>
-      </div>
-
-      <!-- Step 03: Open Any Pull Request -->
-      <div class="rounded-2xl bg-dark-900 border border-white/10 p-6 flex flex-col justify-between space-y-5 hover:border-brand-500/30 transition">
-        <div class="space-y-3">
-          <div class="w-8 h-8 rounded-lg bg-white/5 border border-white/10 font-mono font-bold text-brand-400 flex items-center justify-center text-sm">
-            03
-          </div>
-          <h4 class="font-display font-bold text-white text-base">Open Any Pull Request</h4>
-          <p class="text-xs text-slate-400 leading-relaxed">
-            PatchPilot analyzes diffs instantly, summarizes code impact, flags bugs, and engages in threaded interactive chat.
-          </p>
-        </div>
-
-        <!-- Visual Mockup 3: Automated Review Notification -->
-        <div class="rounded-xl bg-dark-950 border border-white/5 p-3.5 space-y-2 font-mono text-[11px]">
-          <div class="flex items-center justify-between border-b border-white/5 pb-2 text-[10px]">
-            <span class="text-emerald-400 font-semibold flex items-center gap-1">
-              <span class="material-symbols-outlined text-xs">check_circle</span>
-              <span>PR #42 Review</span>
-            </span>
-            <span class="text-slate-500">1.2s</span>
-          </div>
-          <div class="p-2 rounded-lg bg-white/5 border border-white/5 space-y-1 text-[10px]">
-            <div class="text-red-400 bg-red-950/40 px-1.5 py-0.5 rounded">- timeout = 0</div>
-            <div class="text-emerald-400 bg-emerald-950/40 px-1.5 py-0.5 rounded">+ timeout = 5.0</div>
-          </div>
-          <div class="pt-1 flex items-center justify-between text-[10px]">
-            <span class="text-brand-400">@PatchPilot /explain</span>
-            <span class="text-slate-500">Thread Active</span>
+            <div class="pt-1 flex items-center justify-between text-[10px] text-emerald-400">
+              <span>● Webhook Listening</span>
+              <span class="text-slate-500">HMAC-SHA256</span>
+            </div>
           </div>
         </div>
+
+        <!-- Step 02: Deposit Provider Key -->
+        <div
+          class="rounded-2xl bg-dark-900 border border-white/10 p-6 flex flex-col justify-between space-y-5 hover:border-brand-500/30 transition">
+          <div class="space-y-3">
+            <div
+              class="w-8 h-8 rounded-lg bg-white/5 border border-white/10 font-mono font-bold text-brand-400 flex items-center justify-center text-sm">
+              02
+            </div>
+            <h4 class="font-display font-bold text-white text-base">Deposit Provider Key</h4>
+            <p class="text-xs text-slate-400 leading-relaxed">
+              Save your Gemini, Claude, Groq, or OpenAI key into your AES-256-GCM vault with your custom system review
+              policy.
+            </p>
+          </div>
+
+          <!-- Visual Mockup 2: Hardware Vault Envelope -->
+          <div class="rounded-xl bg-dark-950 border border-white/5 p-3.5 space-y-2 font-mono text-[11px]">
+            <div class="flex items-center justify-between text-slate-500 border-b border-white/5 pb-2 text-[10px]">
+              <span class="text-brand-400 flex items-center gap-1">
+                <span class="material-symbols-outlined text-xs">lock</span>
+                <span>AES-256-GCM</span>
+              </span>
+              <span class="text-emerald-400">Hardware Sealed</span>
+            </div>
+            <div class="space-y-1.5 pt-1">
+              <div class="p-2 rounded-lg bg-white/5 border border-white/5 space-y-1">
+                <div class="flex items-center justify-between text-[10px] text-slate-400">
+                  <span>ACTIVE MODEL</span>
+                  <span class="text-brand-400">gemini-2.5-pro</span>
+                </div>
+                <div class="text-[10px] text-slate-300 truncate">
+                  key: ••••••••••••••••AIzaSy98F
+                </div>
+              </div>
+            </div>
+            <div class="pt-1 flex items-center justify-between text-[10px]">
+              <span class="text-slate-500">Nonce: 96-bit Unique</span>
+              <span class="text-emerald-400 font-medium">0ms Retention</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Step 03: Open Any Pull Request -->
+        <div
+          class="rounded-2xl bg-dark-900 border border-white/10 p-6 flex flex-col justify-between space-y-5 hover:border-brand-500/30 transition">
+          <div class="space-y-3">
+            <div
+              class="w-8 h-8 rounded-lg bg-white/5 border border-white/10 font-mono font-bold text-brand-400 flex items-center justify-center text-sm">
+              03
+            </div>
+            <h4 class="font-display font-bold text-white text-base">Open Any Pull Request</h4>
+            <p class="text-xs text-slate-400 leading-relaxed">
+              PatchPilot analyzes diffs instantly, summarizes code impact, flags bugs, and engages in threaded
+              interactive chat.
+            </p>
+          </div>
+
+          <!-- Visual Mockup 3: Automated Review Notification -->
+          <div class="rounded-xl bg-dark-950 border border-white/5 p-3.5 space-y-2.5 font-mono text-[11px]">
+            <div class="flex items-center justify-between border-b border-white/5 pb-2 text-[10px]">
+              <span class="text-slate-300 font-semibold flex items-center gap-1.5">
+                <span class="w-2 h-2 rounded-full bg-brand-500"></span>
+                <span>PatchPilot Bot</span>
+                <span class="text-[9px] px-1 rounded bg-white/10 text-slate-400">bot</span>
+              </span>
+              <span class="text-emerald-400 flex items-center gap-1">
+                <span class="material-symbols-outlined text-[12px]" aria-hidden="true">check</span>
+                <span>Diff Analyzed</span>
+              </span>
+            </div>
+
+            <!-- Scorecard row -->
+            <div class="flex items-center gap-1.5 text-[9px]">
+              <span class="px-1.5 py-0.5 rounded bg-emerald-950/60 text-emerald-300 border border-emerald-800/40">🔴 0
+                Bugs</span>
+              <span class="px-1.5 py-0.5 rounded bg-amber-950/60 text-amber-300 border border-amber-800/40">🟡 1
+                Risk</span>
+              <span class="px-1.5 py-0.5 rounded bg-blue-950/60 text-blue-300 border border-blue-800/40">🔵 1 Nit</span>
+            </div>
+
+            <!-- Diff snippet -->
+            <div class="rounded-lg bg-black/60 border border-white/5 overflow-hidden text-[10px] leading-snug">
+              <div class="bg-white/5 px-2 py-1 text-[9px] text-slate-400 border-b border-white/5 flex justify-between">
+                <span>app/client.py</span>
+                <span class="text-slate-500">@@ -42,3 +42,3 @@</span>
+              </div>
+              <div class="p-1.5 space-y-0.5">
+                <div class="text-red-400/90 bg-red-950/40 px-1 rounded">- async with httpx.AsyncClient() as client:
+                </div>
+                <div class="text-emerald-400 bg-emerald-950/40 px-1 rounded">+ async with
+                  httpx.AsyncClient(timeout=10.0) as client:</div>
+              </div>
+            </div>
+
+            <div class="pt-0.5 flex items-center justify-between text-[10px]">
+              <span class="text-brand-400 font-medium">@PatchPilot fix</span>
+              <span class="text-slate-500">Commit Suggestion ready</span>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- Supported Model Providers -->
+    <section id="models" class="scroll-mt-20 max-w-5xl mx-auto px-6 py-16 border-t border-white/5">
+      <div class="text-center mb-10">
+        <h2 class="text-xs font-mono uppercase tracking-wider text-brand-400 font-semibold mb-2">Multi-Model Flexibility
+        </h2>
+        <h3 class="text-2xl sm:text-3xl font-display font-bold text-white tracking-tight">
+          Bring whichever model suits your workflow
+        </h3>
       </div>
 
-    </div>
-  </section>
+      <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+        <div class="p-3.5 rounded-xl bg-dark-900 border border-white/10 text-center">
+          <span class="text-xs font-display font-bold text-white block">Google Gemini</span>
+          <span class="text-[10px] font-mono text-slate-400">2.5 Pro & Flash</span>
+        </div>
+        <div class="p-3.5 rounded-xl bg-dark-900 border border-white/10 text-center">
+          <span class="text-xs font-display font-bold text-white block">Claude 3.7</span>
+          <span class="text-[10px] font-mono text-slate-400">via OpenRouter</span>
+        </div>
+        <div class="p-3.5 rounded-xl bg-dark-900 border border-white/10 text-center">
+          <span class="text-xs font-display font-bold text-white block">OpenAI</span>
+          <span class="text-[10px] font-mono text-slate-400">GPT-4o & o3-mini</span>
+        </div>
+        <div class="p-3.5 rounded-xl bg-dark-900 border border-white/10 text-center">
+          <span class="text-xs font-display font-bold text-white block">Groq Cloud</span>
+          <span class="text-[10px] font-mono text-slate-400">Llama 3.3 70B</span>
+        </div>
+        <div class="p-3.5 rounded-xl bg-dark-900 border border-white/10 text-center">
+          <span class="text-xs font-display font-bold text-white block">xAI Grok</span>
+          <span class="text-[10px] font-mono text-slate-400">Grok 3 Reasoning</span>
+        </div>
+        <div class="p-3.5 rounded-xl bg-dark-900 border border-white/10 text-center">
+          <span class="text-xs font-display font-bold text-white block">Ollama Local</span>
+          <span class="text-[10px] font-mono text-slate-400">Air-Gapped Node</span>
+        </div>
+      </div>
+    </section>
 
-  <!-- Supported Model Providers -->
-  <section id="models" class="scroll-mt-20 max-w-5xl mx-auto px-6 py-16 border-t border-white/5">
-    <div class="text-center mb-10">
-      <h2 class="text-xs font-mono uppercase tracking-wider text-brand-400 font-semibold mb-2">Multi-Model Flexibility</h2>
-      <h3 class="text-2xl sm:text-3xl font-display font-bold text-white tracking-tight">
-        Bring whichever model suits your workflow
-      </h3>
-    </div>
-
-    <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-      <div class="p-3.5 rounded-xl bg-dark-900 border border-white/10 text-center">
-        <span class="text-xs font-display font-bold text-white block">Google Gemini</span>
-        <span class="text-[10px] font-mono text-slate-400">2.5 Pro & Flash</span>
+    <!-- Final Clean CTA -->
+    <section class="max-w-4xl mx-auto px-6 py-20 text-center">
+      <div
+        class="p-10 rounded-3xl bg-gradient-to-b from-dark-900 to-dark-950 border border-white/10 relative overflow-hidden">
+        <h3 class="text-3xl font-display font-bold text-white tracking-tight mb-4">
+          Ready to supercharge your code reviews?
+        </h3>
+        <p class="text-sm text-slate-400 max-w-lg mx-auto mb-8">
+          Deploy in minutes with Docker. Keep full control of your keys, quotas, and repositories.
+        </p>
+        <div class="flex flex-col sm:flex-row items-center justify-center gap-3">
+          <a href="/dashboard"
+            class="px-6 py-3 rounded-xl bg-brand-500 hover:bg-brand-600 text-white font-display font-semibold text-sm shadow-lg shadow-brand-500/25 transition">
+            Launch BYOK Vault
+          </a>
+          <a href="/docs"
+            class="px-6 py-3 rounded-xl border border-white/10 text-slate-300 hover:text-white hover:bg-white/5 font-display font-semibold text-sm transition">
+            View Documentation
+          </a>
+        </div>
       </div>
-      <div class="p-3.5 rounded-xl bg-dark-900 border border-white/10 text-center">
-        <span class="text-xs font-display font-bold text-white block">Claude 3.7</span>
-        <span class="text-[10px] font-mono text-slate-400">via OpenRouter</span>
-      </div>
-      <div class="p-3.5 rounded-xl bg-dark-900 border border-white/10 text-center">
-        <span class="text-xs font-display font-bold text-white block">OpenAI</span>
-        <span class="text-[10px] font-mono text-slate-400">GPT-4o & o3-mini</span>
-      </div>
-      <div class="p-3.5 rounded-xl bg-dark-900 border border-white/10 text-center">
-        <span class="text-xs font-display font-bold text-white block">Groq Cloud</span>
-        <span class="text-[10px] font-mono text-slate-400">Llama 3.3 70B</span>
-      </div>
-      <div class="p-3.5 rounded-xl bg-dark-900 border border-white/10 text-center">
-        <span class="text-xs font-display font-bold text-white block">xAI Grok</span>
-        <span class="text-[10px] font-mono text-slate-400">Grok 3 Reasoning</span>
-      </div>
-      <div class="p-3.5 rounded-xl bg-dark-900 border border-white/10 text-center">
-        <span class="text-xs font-display font-bold text-white block">Ollama Local</span>
-        <span class="text-[10px] font-mono text-slate-400">Air-Gapped Node</span>
-      </div>
-    </div>
-  </section>
-
-  <!-- Final Clean CTA -->
-  <section class="max-w-4xl mx-auto px-6 py-20 text-center">
-    <div class="p-10 rounded-3xl bg-gradient-to-b from-dark-900 to-dark-950 border border-white/10 relative overflow-hidden">
-      <h3 class="text-3xl font-display font-bold text-white tracking-tight mb-4">
-        Ready to supercharge your code reviews?
-      </h3>
-      <p class="text-sm text-slate-400 max-w-lg mx-auto mb-8">
-        Deploy in minutes with Docker. Keep full control of your keys, quotas, and repositories.
-      </p>
-      <div class="flex flex-col sm:flex-row items-center justify-center gap-3">
-        <a href="/dashboard" class="px-6 py-3 rounded-xl bg-brand-500 hover:bg-brand-600 text-white font-display font-semibold text-sm shadow-lg shadow-brand-500/25 transition">
-          Launch BYOK Vault
-        </a>
-        <a href="/docs" class="px-6 py-3 rounded-xl border border-white/10 text-slate-300 hover:text-white hover:bg-white/5 font-display font-semibold text-sm transition">
-          View Documentation
-        </a>
-      </div>
-    </div>
-  </section>
+    </section>
+  </main>
 
   <!-- Minimal Footer -->
   <footer class="border-t border-white/5 py-8 text-center text-xs text-slate-500 font-mono">
@@ -400,31 +522,201 @@
       <div class="flex items-center gap-5 text-slate-400">
         <a href="/docs" class="hover:text-white transition">Docs</a>
         <a href="/dashboard" class="hover:text-white transition">Vault</a>
-        <a href="https://github.com/89Aman/PatchPilot" target="_blank" rel="noreferrer" class="hover:text-white transition">GitHub</a>
+        <a href="https://github.com/89Aman/PatchPilot" target="_blank" rel="noreferrer"
+          class="hover:text-white transition">GitHub</a>
       </div>
     </div>
   </footer>
 
+  <!-- Clerk Setup & Configuration Modal -->
+  <div id="clerkModal"
+    class="hidden fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+    <div class="bg-dark-900 border border-white/10 rounded-2xl max-w-md w-full p-6 shadow-2xl relative">
+      <div class="flex items-center justify-between mb-4">
+        <div class="flex items-center gap-2">
+          <span class="w-2.5 h-2.5 rounded-full bg-indigo-500"></span>
+          <h3 class="text-sm font-display font-bold text-white">Clerk Authentication</h3>
+        </div>
+        <button onclick="document.getElementById('clerkModal').classList.add('hidden')"
+          class="text-slate-500 hover:text-white text-lg leading-none">&times;</button>
+      </div>
+      <p class="text-xs text-slate-400 mb-4 leading-relaxed">
+        Sign in with Google, GitHub, or Email via Clerk to access your PatchPilot BYOK Vault.
+      </p>
+      <div class="flex items-center justify-end gap-2">
+        <button onclick="document.getElementById('clerkModal').classList.add('hidden')"
+          class="px-4 py-2 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-white text-xs font-medium transition">
+          Close
+        </button>
+        <a href="/auth/login"
+          class="px-4 py-2 rounded-xl bg-brand-500 hover:bg-brand-600 text-white text-xs font-semibold shadow-md shadow-brand-500/20 transition flex items-center gap-1">
+          <span>Sign In with GitHub</span>
+          <span class="material-symbols-outlined text-xs">arrow_forward</span>
+        </a>
+      </div>
+    </div>
+  </div>
+
   <script>
+    let clerkInstance = null;
+
+    function setAuthUIState(isLoggedIn, user = null) {
+      const clerkBtn = document.getElementById("navClerkBtn");
+      const vaultBtn = document.getElementById("navVaultBtn");
+      const heroLoginBtn = document.querySelector('a[href="/auth/login"]');
+
+      if (isLoggedIn) {
+        if (clerkBtn) {
+          clerkBtn.classList.add("hidden");
+          clerkBtn.classList.remove("inline-flex");
+        }
+        if (vaultBtn) {
+          vaultBtn.classList.remove("hidden");
+          vaultBtn.classList.add("inline-flex");
+        }
+        if (heroLoginBtn && user) {
+          heroLoginBtn.href = "/dashboard";
+          heroLoginBtn.innerHTML = `
+            <span class="material-symbols-outlined">account_circle</span>
+            <span>Vault (@${user.login || user.github_username || 'user'})</span>
+          `;
+        }
+      } else {
+        if (clerkBtn) {
+          clerkBtn.classList.remove("hidden");
+          clerkBtn.classList.add("inline-flex");
+        }
+        if (vaultBtn) {
+          vaultBtn.classList.add("hidden");
+          vaultBtn.classList.remove("inline-flex");
+        }
+      }
+    }
+
+    async function syncClerkSession() {
+      if (!clerkInstance || !clerkInstance.user) return false;
+      try {
+        const token = await clerkInstance.session.getToken();
+        const res = await fetch("/auth/clerk/session", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            session_token: token,
+            user: {
+              login: clerkInstance.user.username || clerkInstance.user.primaryEmailAddress?.emailAddress?.split("@")[0] || clerkInstance.user.id,
+              name: clerkInstance.user.fullName || clerkInstance.user.username,
+              avatar_url: clerkInstance.user.imageUrl,
+            }
+          })
+        });
+        return res.ok;
+      } catch (err) {
+        console.debug("Clerk session sync error:", err);
+        return false;
+      }
+    }
+
+    async function initClerk() {
+      try {
+        const res = await fetch("/auth/clerk/config");
+        const cfg = await res.json();
+        if (!cfg.publishable_key) return;
+
+        const domain = cfg.frontend_api || "clerk.noventra.org.in";
+
+        if (!window.Clerk) {
+          if (!document.querySelector('script[src*="/npm/@clerk/ui"]')) {
+            const s1 = document.createElement("script");
+            s1.defer = true;
+            s1.crossOrigin = "anonymous";
+            s1.src = `https://${domain}/npm/@clerk/ui@1/dist/ui.browser.js`;
+            document.head.appendChild(s1);
+          }
+
+          if (!document.querySelector('script[src*="/npm/@clerk/clerk-js"]')) {
+            await new Promise((resolve) => {
+              const s2 = document.createElement("script");
+              s2.defer = true;
+              s2.crossOrigin = "anonymous";
+              s2.setAttribute("data-clerk-publishable-key", cfg.publishable_key);
+              s2.src = `https://${domain}/npm/@clerk/clerk-js@6/dist/clerk.browser.js`;
+              s2.onload = resolve;
+              s2.onerror = resolve;
+              document.head.appendChild(s2);
+            });
+          }
+        }
+
+        let attempts = 0;
+        while (!window.Clerk && attempts < 25) {
+          await new Promise(r => setTimeout(r, 100));
+          attempts++;
+        }
+
+        if (window.Clerk) {
+          clerkInstance = window.Clerk;
+          if (!clerkInstance.loaded) {
+            const loadOptions = { publishableKey: cfg.publishable_key };
+            if (cfg.frontend_api) {
+              loadOptions.frontendApi = cfg.frontend_api;
+            }
+            await clerkInstance.load(loadOptions);
+          }
+
+          if (clerkInstance.user) {
+            await syncClerkSession();
+            setAuthUIState(true, {
+              login: clerkInstance.user.username || clerkInstance.user.primaryEmailAddress?.emailAddress?.split("@")[0] || clerkInstance.user.id
+            });
+            return;
+          }
+
+          clerkInstance.addListener(async (emission) => {
+            if (emission.user) {
+              await syncClerkSession();
+              setAuthUIState(true, {
+                login: emission.user.username || emission.user.primaryEmailAddress?.emailAddress?.split("@")[0] || emission.user.id
+              });
+            } else {
+              setAuthUIState(false);
+            }
+          });
+        }
+      } catch (err) {
+        console.debug("Clerk init:", err);
+      }
+    }
+
+    async function handleClerkAuth() {
+      if (clerkInstance) {
+        clerkInstance.openSignIn();
+      } else {
+        const modal = document.getElementById("clerkModal");
+        if (modal) {
+          modal.classList.remove("hidden");
+        } else {
+          window.location.href = "/auth/login";
+        }
+      }
+    }
+
     async function checkAuthOnLanding() {
       try {
         const res = await fetch("/auth/me");
         const data = await res.json();
         if (data.logged_in && data.user) {
-          const loginBtn = document.querySelector('a[href="/auth/login"]');
-          if (loginBtn) {
-            loginBtn.href = "/dashboard";
-            loginBtn.innerHTML = `
-              <span class="material-symbols-outlined">account_circle</span>
-              <span>Vault (@${data.user.login})</span>
-            `;
-          }
+          setAuthUIState(true, data.user);
+        } else {
+          setAuthUIState(false);
         }
       } catch (e) {
-        // Ignore background auth error on static landing
+        setAuthUIState(false);
       }
     }
+
     checkAuthOnLanding();
+    initClerk();
   </script>
 </body>
+
 </html>
