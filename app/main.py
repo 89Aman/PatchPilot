@@ -199,6 +199,7 @@ async def auth_login():
 
 
 @app.get("/auth/callback", tags=["Authentication"])
+@app.get("/auth/github/callback", tags=["Authentication"])
 async def auth_callback(request: Request, code: str):
     """Handle OAuth callback, issue session cookie, and redirect to dashboard."""
     client_id = settings.GITHUB_CLIENT_ID.strip()

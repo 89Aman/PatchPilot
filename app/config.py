@@ -21,6 +21,7 @@ class Settings(BaseSettings):
 
     # Optional Clerk Authentication (clerk.com)
     CLERK_PUBLISHABLE_KEY: str = ""
+    NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: str = ""
     CLERK_SECRET_KEY: str = ""
     CLERK_JWKS_URL: str = ""
     CLERK_FRONTEND_API: str = ""
@@ -69,7 +70,7 @@ class Settings(BaseSettings):
 
     @property
     def clerk_publishable_key(self) -> str:
-        return self.CLERK_PUBLISHABLE_KEY.strip()
+        return (self.CLERK_PUBLISHABLE_KEY or self.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY).strip()
 
     @property
     def clerk_secret_key(self) -> str:
