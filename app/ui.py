@@ -133,13 +133,13 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         </div>
         <div>
           <span class="font-medium text-white">Sign in to auto-populate your BYOK vault</span>
-          <p class="text-xs text-slate-400">Authenticate with Clerk or GitHub for instant identity and repository mapping.</p>
+          <p class="text-xs text-slate-400">Authenticate with your account for instant identity and repository mapping.</p>
         </div>
       </div>
       <div class="flex items-center gap-2.5">
         <button type="button" onclick="handleClerkAuth()" class="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-display text-xs font-semibold shadow-md shadow-indigo-600/25 transition flex items-center gap-1.5 active:scale-95">
           <span class="material-symbols-outlined text-sm">lock</span>
-          <span>Sign In with Clerk</span>
+          <span>Sign In</span>
         </button>
         <a href="/auth/login" class="px-3.5 py-2 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-slate-300 hover:text-white font-display text-xs font-medium transition flex items-center gap-1.5 active:scale-95">
           <span class="material-symbols-outlined text-sm">login</span>
@@ -148,31 +148,26 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       </div>
     </div>
 
-    <!-- Clerk Setup & Configuration Modal -->
+    <!-- Authentication Modal -->
     <div id="clerkModal" class="hidden fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
       <div class="bg-dark-900 border border-white/10 rounded-2xl p-6 max-w-md w-full shadow-2xl space-y-4">
         <div class="flex items-center justify-between border-b border-white/5 pb-3">
           <div class="flex items-center gap-2">
             <span class="material-symbols-outlined text-indigo-400">lock</span>
-            <h3 class="text-sm font-display font-bold text-white">Clerk Authentication Setup</h3>
+            <h3 class="text-sm font-display font-bold text-white">Sign In to PatchPilot</h3>
           </div>
           <button onclick="document.getElementById('clerkModal').classList.add('hidden')" class="text-slate-500 hover:text-white text-lg leading-none">&times;</button>
         </div>
         <p class="text-xs text-slate-300 leading-relaxed">
-          Clerk enables turnkey sign-in using Google, GitHub, or Email.
+          Sign in using Google, GitHub, or Email to access your encrypted BYOK Vault.
         </p>
-        <ol class="text-xs text-slate-400 space-y-2 list-decimal list-inside font-mono bg-dark-950 p-3.5 rounded-xl border border-white/5">
-          <li>Create a free account at <a href="https://dashboard.clerk.com" target="_blank" class="text-brand-400 hover:underline">dashboard.clerk.com</a></li>
-          <li>Copy your <span class="text-slate-200">Publishable Key</span> (<code class="text-indigo-300">pk_test_...</code>)</li>
-          <li>Add to your <code class="text-brand-400">.env</code> file:<br/><span class="text-emerald-400">CLERK_PUBLISHABLE_KEY=pk_test_...</span><br/><span class="text-emerald-400">CLERK_SECRET_KEY=sk_test_...</span></li>
-        </ol>
         <div class="flex justify-end gap-2 pt-2">
           <button onclick="document.getElementById('clerkModal').classList.add('hidden')" class="px-4 py-2 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-white text-xs font-medium transition">
             Close
           </button>
-          <a href="https://dashboard.clerk.com" target="_blank" class="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold shadow-md shadow-indigo-600/25 transition flex items-center gap-1">
-            <span>Open Clerk Dashboard</span>
-            <span class="material-symbols-outlined text-xs">open_in_new</span>
+          <a href="/auth/login" class="px-4 py-2 rounded-xl bg-brand-500 hover:bg-brand-600 text-white text-xs font-semibold shadow-md shadow-brand-500/25 transition flex items-center gap-1">
+            <span>Continue with GitHub</span>
+            <span class="material-symbols-outlined text-xs">arrow_forward</span>
           </a>
         </div>
       </div>
@@ -669,7 +664,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           const authBadge = document.getElementById("authBadge");
           if (authBadge) {
             const isClerk = data.provider === "clerk";
-            authBadge.textContent = isClerk ? "Clerk Authenticated" : "OAuth Authenticated";
+            authBadge.textContent = isClerk ? "SSO Verified" : "OAuth Verified";
             authBadge.className = isClerk
               ? "text-[10px] font-mono px-2 py-0.5 rounded bg-indigo-500/10 text-indigo-400 border border-indigo-500/20"
               : "text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20";
