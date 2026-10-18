@@ -684,21 +684,8 @@
     }
 
     async function handleClerkAuth() {
-      if (clerkInstance) {
-        try {
-          await clerkInstance.openSignIn({
-            fallbackRedirectUrl: `${window.location.origin}/dashboard`,
-            forceRedirectUrl: `${window.location.origin}/dashboard`,
-            signUpFallbackRedirectUrl: `${window.location.origin}/dashboard`,
-            signUpForceRedirectUrl: `${window.location.origin}/dashboard`,
-          });
-          return;
-        } catch (err) {
-          console.warn("Clerk openSignIn failed (blocked or headless):", err);
-        }
-      }
-      // Fallback to GitHub OAuth if Clerk or Clerk UI is blocked by client
-      window.location.href = "/auth/login";
+      const target = encodeURIComponent(`${window.location.origin}/dashboard`);
+      window.location.href = `https://accounts.noventra.org.in/sign-in?sign_in_force_redirect_url=${target}&sign_up_force_redirect_url=${target}&redirect_url=${target}`;
     }
 
     async function checkAuthOnLanding() {

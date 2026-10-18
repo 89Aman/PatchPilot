@@ -635,11 +635,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
 
     async function handleClerkAuth() {
-      if (clerkInstance) {
-        clerkInstance.openSignIn();
-      } else {
-        document.getElementById("clerkModal").classList.remove("hidden");
-      }
+      const target = encodeURIComponent(`${window.location.origin}/dashboard`);
+      window.location.href = `https://accounts.noventra.org.in/sign-in?sign_in_force_redirect_url=${target}&sign_up_force_redirect_url=${target}&redirect_url=${target}`;
     }
 
     async function signOutUser() {
