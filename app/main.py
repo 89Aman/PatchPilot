@@ -271,6 +271,16 @@ async def favicon():
     return Response(content=FAVICON_SVG, media_type="image/svg+xml")
 
 
+@app.get("/apple-touch-icon.png", include_in_schema=False)
+@app.get("/apple-touch-icon-precomposed.png", include_in_schema=False)
+async def apple_touch_icon():
+    """Serve Apple touch icon."""
+    touch_file = STATIC_DIR / "favicon-180.png"
+    if touch_file.exists():
+        return FileResponse(touch_file, media_type="image/png")
+    return FileResponse(STATIC_DIR / "logo.png", media_type="image/png")
+
+
 
 @app.get("/logo.png", include_in_schema=False)
 async def logo():
