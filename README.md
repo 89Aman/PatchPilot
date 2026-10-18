@@ -1,6 +1,7 @@
 <p align="center">
   <a href="https://patchpilot.noventra.org.in" target="_blank" rel="noopener noreferrer">
-    <img src="patchpilot-brand/banners/github-social-1280x640.png" alt="PatchPilot - AI PR Reviewer" width="100%">
+    <img src="patchpilot-brand/banners/linkedin-banner-1584x396.png" alt="PatchPilot - AI PR Reviewer"
+      width="100%">
   </a>
 </p>
 
