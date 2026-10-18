@@ -576,7 +576,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         const cfg = await res.json();
         if (cfg.publishable_key && window.Clerk) {
           clerkInstance = window.Clerk;
-          await clerkInstance.load({ publishableKey: cfg.publishable_key });
+          const loadOptions = { publishableKey: cfg.publishable_key };
+          if (cfg.frontend_api) {
+            loadOptions.frontendApi = cfg.frontend_api;
+          }
+          await clerkInstance.load(loadOptions);
           if (clerkInstance.user) {
             const token = await clerkInstance.session.getToken();
             await fetch("/auth/clerk/session", {

@@ -242,10 +242,12 @@ class ClerkSessionRequest(BaseModel):
 async def clerk_config():
     """Return Clerk publishable key and configuration status for frontend client."""
     pk = settings.clerk_publishable_key
+    custom_api = settings.clerk_frontend_api
+    derived_api = custom_api or (derive_frontend_api(pk) if pk else None)
     return {
         "publishable_key": pk,
         "is_configured": bool(pk),
-        "frontend_api": derive_frontend_api(pk) if pk else None,
+        "frontend_api": derived_api,
     }
 
 

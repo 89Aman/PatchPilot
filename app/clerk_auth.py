@@ -13,8 +13,12 @@ _JWKS_CLIENTS: dict[str, PyJWKClient] = {}
 
 
 def derive_frontend_api(publishable_key: str | None = None) -> str | None:
-    """Derive Clerk frontend API domain from publishable key (pk_test_... or pk_live_...)."""
-    target = get_settings().clerk_publishable_key if publishable_key is None else publishable_key
+    """Derive Clerk frontend API domain from custom setting or publishable key."""
+    s = get_settings()
+    if s.clerk_frontend_api:
+        return s.clerk_frontend_api
+
+    target = s.clerk_publishable_key if publishable_key is None else publishable_key
     key = target.strip()
     if not key or not (key.startswith("pk_test_") or key.startswith("pk_live_")):
         return None
@@ -41,7 +45,7 @@ def get_clerk_jwks_url(settings=None) -> str:
     if s.CLERK_JWKS_URL.strip():
         return s.CLERK_JWKS_URL.strip()
 
-    domain = derive_frontend_api(s.clerk_publishable_key)
+    domain = s.clerk_frontend_api or derive_frontend_api(s.clerk_publishable_key)
     if domain:
         return f"https://{domain}/.well-known/jwks.json"
 

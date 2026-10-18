@@ -23,6 +23,7 @@ class Settings(BaseSettings):
     CLERK_PUBLISHABLE_KEY: str = ""
     CLERK_SECRET_KEY: str = ""
     CLERK_JWKS_URL: str = ""
+    CLERK_FRONTEND_API: str = ""
 
     HOST: str = "0.0.0.0"
     PORT: int = 8080
@@ -73,6 +74,10 @@ class Settings(BaseSettings):
     @property
     def clerk_secret_key(self) -> str:
         return self.CLERK_SECRET_KEY.strip()
+
+    @property
+    def clerk_frontend_api(self) -> str:
+        return self.CLERK_FRONTEND_API.strip()
 
     @property
     def session_secret(self) -> str:
