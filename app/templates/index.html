@@ -6,7 +6,8 @@
   <meta content="width=device-width, initial-scale=1.0" name="viewport" />
   <title>PatchPilot — AI Code Reviews for GitHub (BYOK & Self-Hosted)</title>
   <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-  <link rel="alternate icon" href="/favicon.ico" />
+  <link rel="alternate icon" type="image/x-icon" href="/favicon.ico" />
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
   <meta name="description"
     content="PatchPilot is a self-hosted, multi-provider Bring-Your-Own-Key (BYOK) GitHub App and AI Pull Request review engine. Encrypted AES-256-GCM vault with Gemini, Claude, OpenAI, Groq, and Ollama support." />
   <link rel="canonical" href="https://patchpilot.noventra.org.in/" />
@@ -158,7 +159,7 @@
             <path d="M7 10.5V7a5 5 0 0 1 10 0v3.5"></path>
             <circle cx="12" cy="16" r="1.2" fill="currentColor"></circle>
           </svg>
-          <span>Sign In with Clerk</span>
+          <span>Sign In</span>
         </button>
 
         <!-- Authorized: Go to Vault -->
@@ -207,7 +208,7 @@
             <span class="material-symbols-outlined">key</span>
             <span>Configure Your BYOK Vault</span>
           </a>
-          <a href="/auth/login"
+          <a id="heroLoginBtn" href="/auth/login"
             class="w-full sm:w-auto px-6 py-3.5 rounded-xl border border-white/15 bg-white/5 hover:bg-white/10 text-white font-display font-semibold text-sm transition active:scale-95 flex items-center justify-center gap-2">
             <span class="material-symbols-outlined">login</span>
             <span>Sign In with GitHub</span>
@@ -535,7 +536,7 @@
       <div class="flex items-center justify-between mb-4">
         <div class="flex items-center gap-2">
           <span class="w-2.5 h-2.5 rounded-full bg-indigo-500"></span>
-          <h3 class="text-sm font-display font-bold text-white">Clerk Authentication</h3>
+          <h3 class="text-sm font-display font-bold text-white">Authentication</h3>
         </div>
         <button onclick="document.getElementById('clerkModal').classList.add('hidden')"
           class="text-slate-500 hover:text-white text-lg leading-none">&times;</button>
@@ -563,7 +564,7 @@
     function setAuthUIState(isLoggedIn, user = null) {
       const clerkBtn = document.getElementById("navClerkBtn");
       const vaultBtn = document.getElementById("navVaultBtn");
-      const heroLoginBtn = document.querySelector('a[href="/auth/login"]');
+      const heroLoginBtn = document.getElementById("heroLoginBtn");
 
       if (isLoggedIn) {
         if (clerkBtn) {
@@ -574,12 +575,8 @@
           vaultBtn.classList.remove("hidden");
           vaultBtn.classList.add("inline-flex");
         }
-        if (heroLoginBtn && user) {
-          heroLoginBtn.href = "/dashboard";
-          heroLoginBtn.innerHTML = `
-            <span class="material-symbols-outlined">account_circle</span>
-            <span>Vault (@${user.login || user.github_username || 'user'})</span>
-          `;
+        if (heroLoginBtn) {
+          heroLoginBtn.classList.add("hidden");
         }
       } else {
         if (clerkBtn) {
@@ -589,6 +586,9 @@
         if (vaultBtn) {
           vaultBtn.classList.add("hidden");
           vaultBtn.classList.remove("inline-flex");
+        }
+        if (heroLoginBtn) {
+          heroLoginBtn.classList.remove("hidden");
         }
       }
     }
