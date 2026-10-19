@@ -311,10 +311,11 @@ async def publish_pr_review(
         "X-GitHub-Api-Version": "2022-11-28",
     }
 
+    review_event = "APPROVE" if str(verdict).upper() in ("PASS", "APPROVE") and bug_count == 0 and secret_alerts_count == 0 else "COMMENT"
     payload: dict[str, Any] = {
         "commit_id": head_sha,
         "body": summary_card,
-        "event": "COMMENT",
+        "event": review_event,
     }
     if comments:
         payload["comments"] = comments
@@ -326,11 +327,11 @@ async def publish_pr_review(
 
     try:
         response = await client.post(url, headers=headers, json=payload)
-        if response.status_code == 422 and comments:
-            logger.warning("GitHub 422 with comments. Retrying summary card only for %s#%s", repo_full_name, pr_number)
+        if response.status_code == 422:
+            logger.warning("GitHub 422 for review event %s. Retrying with COMMENT event for %s#%s", review_event, repo_full_name, pr_number)
             fallback_payload = {
                 "commit_id": head_sha,
-                "body": f"{summary_card}\n\n*(Note: Some inline diff comments could not be anchored)*",
+                "body": f"{summary_card}\n\n*(Note: Some inline diff comments could not be anchored)*" if comments else summary_card,
                 "event": "COMMENT",
             }
             response = await client.post(url, headers=headers, json=fallback_payload)

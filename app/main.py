@@ -23,7 +23,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
-from app.crypto import encrypt_secret
+from app.crypto import decrypt_secret, encrypt_secret
 from app.db import DEFAULT_POLICY, Base, SessionLocal, VaultConfig, engine, get_db, init_db
 from app.github_auth import (
     apply_pr_labels,
@@ -567,6 +567,21 @@ async def get_user_repositories(patchpilot_session: str | None = Cookie(None)):
 # BYOK Vault Endpoints
 # -----------------------------------------------------------------------------
 
+def _mask_api_key(encrypted_key: str | None) -> str:
+    """Safely decrypt and produce a masked string for UI display."""
+    if not encrypted_key:
+        return ""
+    try:
+        raw = decrypt_secret(encrypted_key)
+        if not raw:
+            return ""
+        if len(raw) <= 8:
+            return "••••••••"
+        return f"{raw[:4]}{'•' * min(len(raw) - 8, 16)}{raw[-4:]}"
+    except Exception:
+        return "••••••••"
+
+
 @app.get("/vault/{owner}", tags=["Vault"])
 async def get_vault(
     owner: str,
@@ -586,6 +601,7 @@ async def get_vault(
             "model": "gemini-2.5-pro",
             "base_url": "",
             "has_api_key": False,
+            "masked_api_key": "",
             "review_policy": DEFAULT_POLICY,
         }
 
@@ -595,6 +611,7 @@ async def get_vault(
         "model": cfg.model,
         "base_url": cfg.base_url or "",
         "has_api_key": bool(cfg.encrypted_api_key),
+        "masked_api_key": _mask_api_key(cfg.encrypted_api_key),
         "review_policy": cfg.review_policy,
         "updated_at": cfg.updated_at.isoformat() if cfg.updated_at else None,
     }
@@ -648,6 +665,7 @@ async def upsert_vault(
         "model": cfg.model,
         "base_url": cfg.base_url,
         "has_api_key": bool(cfg.encrypted_api_key),
+        "masked_api_key": _mask_api_key(cfg.encrypted_api_key),
         "review_policy": cfg.review_policy,
         "updated_at": cfg.updated_at.isoformat() if cfg.updated_at else None,
     }

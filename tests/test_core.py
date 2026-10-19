@@ -371,6 +371,24 @@ async def test_vault_admin_token_protection():
         res_valid = await client.get("/vault/test-owner", headers={"X-Admin-Token": settings.ADMIN_API_TOKEN})
         assert res_valid.status_code == 200
         assert res_valid.json()["owner"] == "test-owner"
+        assert res_valid.json()["masked_api_key"] == ""
+
+        # Save API key and verify masked_api_key returned
+        res_put = await client.put(
+            "/vault/test-owner",
+            headers={"X-Admin-Token": settings.ADMIN_API_TOKEN},
+            json={"provider": "groq", "model": "llama-3.1-8b-instant", "api_key": "gsk_1234567890abcdef", "review_policy": "standard"},
+        )
+        assert res_put.status_code == 200
+        assert res_put.json()["has_api_key"] is True
+        masked = res_put.json()["masked_api_key"]
+        assert masked.startswith("gsk_")
+        assert masked.endswith("cdef")
+        assert "•" in masked
+
+        # Verify GET also returns masked key
+        res_get_again = await client.get("/vault/test-owner", headers={"X-Admin-Token": settings.ADMIN_API_TOKEN})
+        assert res_get_again.json()["masked_api_key"] == masked
 
 
 @pytest.mark.asyncio

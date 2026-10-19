@@ -283,7 +283,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
               </label>
             </div>
             <div class="relative flex items-center">
-              <input id="apiKey" type="password" placeholder="Leave blank to retain existing key"
+              <input id="apiKey" type="password" placeholder="Paste API key (e.g. gsk_... or AIza...)"
+                onfocus="if (this.value === this.dataset.savedMasked) this.select()"
                 class="w-full bg-dark-950 border border-white/10 rounded-xl pl-3.5 pr-10 py-2.5 text-xs font-mono text-white placeholder-slate-600 focus:outline-none focus:border-brand-500 transition" />
               <button type="button" onclick="toggleVisibility('apiKey', 'apiKeyEyeIcon')" class="absolute right-3 text-slate-500 hover:text-slate-300 transition" title="Toggle visibility">
                 <span id="apiKeyEyeIcon" class="material-symbols-outlined text-base">visibility</span>
@@ -854,14 +855,21 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       document.getElementById("baseUrl").value = data.base_url || "";
       document.getElementById("reviewPolicy").value = data.review_policy || "";
       const statusBadge = document.getElementById("keyStatusBadge");
+      const keyInput = document.getElementById("apiKey");
       if (data.has_api_key) {
         statusBadge.innerHTML = '<span class="w-1.5 h-1.5 rounded-full bg-emerald-400"></span><span>Key Active (Encrypted)</span>';
         statusBadge.className = "text-xs font-mono px-2.5 py-1 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 flex items-center gap-1.5";
         document.getElementById("keyHint").textContent = "(Saved in Vault)";
+        if (data.masked_api_key) {
+          keyInput.value = data.masked_api_key;
+          keyInput.dataset.savedMasked = data.masked_api_key;
+        }
       } else {
         statusBadge.innerHTML = '<span class="w-1.5 h-1.5 rounded-full bg-amber-400"></span><span>No Key Stored</span>';
         statusBadge.className = "text-xs font-mono px-2.5 py-1 rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/20 flex items-center gap-1.5";
         document.getElementById("keyHint").textContent = "(No Key Set)";
+        keyInput.value = "";
+        delete keyInput.dataset.savedMasked;
       }
       showToast(`Loaded configuration for '${data.owner}'`, "info");
     }
@@ -875,10 +883,14 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       const headers = { "Content-Type": "application/json" };
       if (token) headers["X-Admin-Token"] = token;
 
+      const keyInput = document.getElementById("apiKey");
+      const currentKey = keyInput.value.trim();
+      const apiKeyToSend = (currentKey === keyInput.dataset.savedMasked) ? "" : currentKey;
+
       const payload = {
         provider: document.getElementById("provider").value,
         model: document.getElementById("model").value.trim(),
-        api_key: document.getElementById("apiKey").value.trim(),
+        api_key: apiKeyToSend,
         base_url: document.getElementById("baseUrl").value.trim() || null,
         review_policy: document.getElementById("reviewPolicy").value
       };
@@ -893,7 +905,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         showToast(`Save failed (${res.status}): ${await res.text()}`, "error");
         return;
       }
-      document.getElementById("apiKey").value = "";
+      const data = await res.json();
+      if (data.masked_api_key) {
+        keyInput.value = data.masked_api_key;
+        keyInput.dataset.savedMasked = data.masked_api_key;
+      }
       const statusBadge = document.getElementById("keyStatusBadge");
       statusBadge.innerHTML = '<span class="w-1.5 h-1.5 rounded-full bg-emerald-400"></span><span>Key Active (Encrypted)</span>';
       statusBadge.className = "text-xs font-mono px-2.5 py-1 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 flex items-center gap-1.5";
