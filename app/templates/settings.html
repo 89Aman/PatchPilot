@@ -1,21 +1,22 @@
 {% extends "base.html" %}
 
-{% block title %}ContextLens — Credentials Vault Settings{% endblock %}
+{% block title %}PatchPilot — Credentials Vault Settings{% endblock %}
 
 {% block content %}
-<div class="max-w-4xl mx-auto px-4 sm:px-6 py-12">
-  <div class="mb-8">
-    <div class="flex items-center gap-2 text-xs font-semibold text-indigo-400 uppercase tracking-wider mb-2">
+<div class="max-w-4xl mx-auto px-4 sm:px-6 py-12 space-y-8">
+  <div>
+    <div class="flex items-center gap-2 text-xs font-semibold text-brand-400 uppercase tracking-wider mb-2">
       <a href="/" class="hover:underline text-slate-400">Home</a>
       <span>&rsaquo;</span>
       <span>Credentials Vault</span>
     </div>
-    <h1 class="text-3xl font-extrabold text-white">🛡️ BYOK Credentials & Vault Settings</h1>
+    <h1 class="text-3xl font-extrabold text-white">🛡️ BYOK Credentials &amp; Vault Settings</h1>
     <p class="text-sm text-slate-400 mt-1">
-      Manage your LLM provider, model configuration, encrypted API keys, and repository review guidelines.
+      Manage your LLM provider, editable model slugs, encrypted API keys, multi-key failovers, and review guidelines.
     </p>
   </div>
 
+  <!-- Primary Vault Card -->
   <div class="bg-slate-900/90 border border-slate-800 rounded-2xl shadow-2xl p-6 sm:p-8 space-y-6">
     <!-- Owner & Admin Token -->
     <div class="grid grid-cols-1 sm:grid-cols-2 gap-5 pb-6 border-b border-slate-800/80">
@@ -29,7 +30,7 @@
             type="text"
             placeholder="e.g. 89Aman or my-org"
             value="89Aman"
-            class="w-full bg-slate-950 border border-slate-700/80 rounded-xl px-3.5 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 transition"
+            class="w-full bg-slate-950 border border-slate-700/80 rounded-xl px-3.5 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 transition font-mono"
           />
         </div>
         <p class="text-[11px] text-slate-400 mt-1">Repository owner or organization name (case-insensitive).</p>
@@ -46,6 +47,48 @@
           class="w-full bg-slate-950 border border-slate-700/80 rounded-xl px-3.5 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 transition font-mono"
         />
         <p class="text-[11px] text-slate-400 mt-1">Required in <code class="text-indigo-300 font-mono">X-Admin-Token</code> header to protect vault endpoints.</p>
+      </div>
+    </div>
+
+    <!-- Official Free Models 1-Click Catalog -->
+    <div class="rounded-xl border border-slate-800 bg-slate-950/70 p-4 space-y-3">
+      <div class="flex items-center justify-between">
+        <span class="text-xs font-mono text-emerald-400 font-bold flex items-center gap-1.5">
+          <span>✨</span>
+          <span>Official Free-Tier Presets (1-Click Fill)</span>
+        </span>
+        <span class="text-[11px] text-slate-400 font-mono">100% Free / Generous Quota</span>
+      </div>
+      <div class="flex flex-wrap gap-2 text-xs">
+        <button type="button" onclick="setFreeModelPreset('gemini', 'gemini-2.5-flash')" class="px-2.5 py-1 rounded-lg bg-slate-800/80 hover:bg-emerald-600/20 hover:text-emerald-300 text-slate-200 border border-slate-700/60 transition font-mono" title="Google AI Studio: 15 RPM, 1M TPM Free">
+          🟢 gemini-2.5-flash
+        </button>
+        <button type="button" onclick="setFreeModelPreset('gemini', 'gemini-2.5-pro')" class="px-2.5 py-1 rounded-lg bg-slate-800/80 hover:bg-emerald-600/20 hover:text-emerald-300 text-slate-200 border border-slate-700/60 transition font-mono" title="Google AI Studio: 2M Context Reasoning">
+          🟢 gemini-2.5-pro
+        </button>
+        <button type="button" onclick="setFreeModelPreset('groq', 'llama-3.3-70b-versatile')" class="px-2.5 py-1 rounded-lg bg-slate-800/80 hover:bg-amber-600/20 hover:text-amber-300 text-slate-200 border border-slate-700/60 transition font-mono" title="Groq Cloud: 30 RPM, 300+ tok/s">
+          🟡 llama-3.3-70b (groq)
+        </button>
+        <button type="button" onclick="setFreeModelPreset('groq', 'qwen-2.5-coder-32b')" class="px-2.5 py-1 rounded-lg bg-slate-800/80 hover:bg-amber-600/20 hover:text-amber-300 text-slate-200 border border-slate-700/60 transition font-mono" title="Groq Cloud: Coding Specialist">
+          🟡 qwen-coder-32b (groq)
+        </button>
+        <button type="button" onclick="setFreeModelPreset('openrouter', 'deepseek/deepseek-r1:free')" class="px-2.5 py-1 rounded-lg bg-slate-800/80 hover:bg-purple-600/20 hover:text-purple-300 text-slate-200 border border-slate-700/60 transition font-mono" title="OpenRouter: 100% Free Reasoning">
+          🟣 deepseek-r1:free
+        </button>
+        <button type="button" onclick="setFreeModelPreset('openrouter', 'meta-llama/llama-3.3-70b-instruct:free')" class="px-2.5 py-1 rounded-lg bg-slate-800/80 hover:bg-purple-600/20 hover:text-purple-300 text-slate-200 border border-slate-700/60 transition font-mono" title="OpenRouter: Free Open Weights">
+          🟣 llama-3.3-70b:free
+        </button>
+        <button type="button" onclick="setFreeModelPreset('ollama', 'qwen2.5-coder:14b')" class="px-2.5 py-1 rounded-lg bg-slate-800/80 hover:bg-blue-600/20 hover:text-blue-300 text-slate-200 border border-slate-700/60 transition font-mono" title="Ollama: Local Self-Hosted">
+          🔵 qwen2.5-coder:14b
+        </button>
+      </div>
+      <div class="flex items-center justify-between text-[11px] text-slate-400 pt-2 border-t border-slate-800/80">
+        <span>Get Official Free API Keys:</span>
+        <div class="flex items-center gap-3">
+          <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer" class="text-indigo-400 hover:underline">Google AI Studio ↗</a>
+          <a href="https://console.groq.com/keys" target="_blank" rel="noreferrer" class="text-indigo-400 hover:underline">Groq Console ↗</a>
+          <a href="https://openrouter.ai/keys" target="_blank" rel="noreferrer" class="text-indigo-400 hover:underline">OpenRouter ↗</a>
+        </div>
       </div>
     </div>
 
@@ -72,13 +115,13 @@
 
       <div>
         <label for="model" class="block text-xs font-bold uppercase tracking-wider text-slate-300 mb-1.5">
-          Model Identifier
+          Model Identifier (Fully Editable)
         </label>
         <input
           id="model"
           type="text"
           list="modelSuggestions"
-          placeholder="e.g. gemini-2.5-pro"
+          placeholder="e.g. gemini-2.5-pro or llama-3.3-70b-versatile"
           value="gemini-2.5-pro"
           class="w-full bg-slate-950 border border-slate-700/80 rounded-xl px-3.5 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 transition font-mono"
         />
@@ -132,10 +175,10 @@
       </div>
       <textarea
         id="reviewPolicy"
-        rows="7"
+        rows="5"
         class="w-full bg-slate-950 border border-slate-700/80 rounded-xl p-3.5 text-xs text-slate-200 font-mono focus:outline-none focus:border-indigo-500 transition"
       ></textarea>
-      <p class="text-[11px] text-slate-400 mt-1">Instructions prepended to every PR review and interactive /lens query prompt.</p>
+      <p class="text-[11px] text-slate-400 mt-1">Instructions prepended to every PR review and interactive /patchpilot query prompt.</p>
     </div>
 
     <!-- Status Alert Box -->
@@ -154,10 +197,10 @@
       <div class="flex items-center gap-3">
         <button
           type="button"
-          onclick="testConnection()"
+          onclick="testConnection('primary')"
           class="px-5 py-2.5 rounded-xl bg-amber-600/90 hover:bg-amber-500 text-white text-xs font-semibold shadow-md shadow-amber-600/20 transition flex items-center gap-2"
         >
-          <span>⚡</span> Test Model Connection
+          <span>⚡</span> Test Primary Connection
         </button>
 
         <button
@@ -168,6 +211,119 @@
           <span>💾</span> Save Credentials
         </button>
       </div>
+    </div>
+  </div>
+
+  <!-- Saved API Keys & Sequential Fallbacks Table Card -->
+  <div class="bg-slate-900/90 border border-slate-800 rounded-2xl shadow-2xl p-6 sm:p-8 space-y-4">
+    <div class="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 pb-3">
+      <div>
+        <h2 class="text-lg font-bold text-white flex items-center gap-2">
+          <span>🛡️</span>
+          <span>Saved Keys &amp; Sequential Multi-Provider Fallback</span>
+        </h2>
+        <p class="text-xs text-slate-400 mt-0.5">
+          Automated multi-key failover when primary encounters 429, 401/402/403 quota exhaustion, 5xx outages, or timeouts.
+        </p>
+      </div>
+      <button
+        type="button"
+        onclick="openAddFallbackModal()"
+        class="px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold shadow-md transition flex items-center gap-1.5"
+      >
+        <span>+</span>
+        <span>Add Fallback Key</span>
+      </button>
+    </div>
+
+    <!-- Inventory Table -->
+    <div class="overflow-x-auto rounded-xl border border-slate-800">
+      <table class="w-full text-left border-collapse text-xs">
+        <thead>
+          <tr class="border-b border-slate-800 bg-slate-950 text-[11px] font-mono text-slate-400 uppercase tracking-wider">
+            <th class="py-2.5 px-3.5">Name / Label</th>
+            <th class="py-2.5 px-3.5">Provider &amp; Model</th>
+            <th class="py-2.5 px-3.5">Key Preview</th>
+            <th class="py-2.5 px-3.5">Role</th>
+            <th class="py-2.5 px-3.5 text-right">Actions</th>
+          </tr>
+        </thead>
+        <tbody id="savedKeysTableContainer" class="divide-y divide-slate-800 font-mono">
+          <tr>
+            <td colspan="5" class="py-6 text-center text-xs text-slate-500">
+              Loading saved credentials...
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Add Fallback Modal -->
+  <div id="fallbackModal" class="hidden fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 max-w-lg w-full shadow-2xl space-y-4">
+      <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+        <h3 class="text-sm font-bold text-white flex items-center gap-2">
+          <span>🛡️</span>
+          <span>Add Secondary Fallback Credential</span>
+        </h3>
+        <button onclick="closeAddFallbackModal()" class="text-slate-400 hover:text-white text-lg">&times;</button>
+      </div>
+
+      <p class="text-xs text-slate-300">
+        When primary hits rate limits (429) or fails, PatchPilot routes reviews to this secondary provider automatically.
+      </p>
+
+      <form onsubmit="event.preventDefault(); submitFallback();" class="space-y-3.5">
+        <div>
+          <label class="block text-[11px] font-semibold text-slate-400 mb-1">Fallback Label</label>
+          <input id="fbName" type="text" placeholder="e.g. Groq Cloud Fallback"
+            class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2 text-xs font-mono text-white focus:outline-none focus:border-indigo-500" />
+        </div>
+
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-[11px] font-semibold text-slate-400 mb-1">Provider</label>
+            <select id="fbProvider" onchange="onFallbackProviderChange()"
+              class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs font-mono text-white focus:outline-none focus:border-indigo-500">
+              <option value="groq">Groq Cloud</option>
+              <option value="gemini">Google Gemini</option>
+              <option value="openrouter">OpenRouter</option>
+              <option value="openai">OpenAI</option>
+              <option value="ollama">Ollama</option>
+              <option value="custom">Custom Endpoint</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-[11px] font-semibold text-slate-400 mb-1">Model Slug (Editable)</label>
+            <input id="fbModel" type="text" value="llama-3.3-70b-versatile"
+              class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2 text-xs font-mono text-white focus:outline-none focus:border-indigo-500" />
+          </div>
+        </div>
+
+        <div>
+          <label class="block text-[11px] font-semibold text-slate-400 mb-1">API Key</label>
+          <input id="fbApiKey" type="password" placeholder="Paste fallback API key (gsk_..., AIza..., etc.)"
+            class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2 text-xs font-mono text-white focus:outline-none focus:border-indigo-500" />
+        </div>
+
+        <div>
+          <label class="block text-[11px] font-semibold text-slate-400 mb-1">Base URL (Optional)</label>
+          <input id="fbBaseUrl" type="text" placeholder="https://api.groq.com/openai/v1"
+            class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2 text-xs font-mono text-white focus:outline-none focus:border-indigo-500" />
+        </div>
+
+        <div class="flex items-center justify-end gap-2 pt-2 border-t border-slate-800">
+          <button type="button" onclick="closeAddFallbackModal()"
+            class="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium">
+            Cancel
+          </button>
+          <button type="submit"
+            class="px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold shadow-md">
+            Save Fallback
+          </button>
+        </div>
+      </form>
     </div>
   </div>
 </div>
@@ -186,17 +342,17 @@
   };
 
   const POLICY_PRESETS = {
-    standard: `# ContextLens Code Review Guidelines
+    standard: `# PatchPilot Code Review Guidelines
 - Identify critical bugs, security vulnerabilities, memory/resource leaks, and edge-case exceptions.
 - Highlight performance bottlenecks or unnecessary redundant operations.
 - Flag breaking changes or deviations from repository architectural idioms.
 - Keep feedback objective, constructive, and directly actionable.`,
-    security: `# ContextLens Strict Security Review Policy
+    security: `# PatchPilot Strict Security Review Policy
 - Scrutinize all user inputs, deserialization, SQL queries, and shell executions for injection vectors.
 - Enforce strict authentication, authorization, and secret redaction.
 - Require defense-in-depth sanitization and cryptographic integrity checks.
 - Flag any use of deprecated or insecure cryptographic primitives.`,
-    concise: `# ContextLens Concise Review Guidelines
+    concise: `# PatchPilot Concise Review Guidelines
 - Report bugs only. Ignore style, formatting, or minor nits.
 - Provide maximum 1 sentence explanation and exact replacement suggestion.`
   };
@@ -216,6 +372,14 @@
     box.classList.remove("hidden");
   }
 
+  function setFreeModelPreset(provider, modelId) {
+    document.getElementById("provider").value = provider;
+    onProviderChange();
+    // Populate model text box, but keep it completely editable
+    document.getElementById("model").value = modelId;
+    showAlert(`Selected free model preset: ${modelId}`);
+  }
+
   function onProviderChange() {
     const provider = document.getElementById("provider").value;
     const list = document.getElementById("modelSuggestions");
@@ -230,6 +394,200 @@
     }
   }
 
+  function escapeHtml(str) {
+    if (!str) return "";
+    const div = document.createElement("div");
+    div.textContent = str;
+    return div.innerHTML;
+  }
+
+  function renderSavedKeysTable(data) {
+    const container = document.getElementById("savedKeysTableContainer");
+    if (!container) return;
+
+    const rows = [];
+    const primaryMasked = data.masked_api_key || (data.has_api_key ? "••••••••" : "Not configured");
+
+    rows.push(`
+      <tr class="border-b border-slate-800 bg-slate-950/40">
+        <td class="py-3 px-3.5">
+          <div class="flex items-center gap-1.5 font-medium text-white">
+            <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
+            <span>Primary Provider</span>
+          </div>
+          <span class="text-[10px] text-slate-500 font-mono">Default Route</span>
+        </td>
+        <td class="py-3 px-3.5">
+          <div class="text-xs text-white capitalize font-semibold">${escapeHtml(data.provider || 'gemini')}</div>
+          <div class="text-[11px] text-slate-400 font-mono">${escapeHtml(data.model || 'gemini-2.5-pro')}</div>
+        </td>
+        <td class="py-3 px-3.5 font-mono text-xs text-indigo-400">
+          <span>${escapeHtml(primaryMasked)}</span>
+        </td>
+        <td class="py-3 px-3.5">
+          <span class="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+            Primary
+          </span>
+        </td>
+        <td class="py-3 px-3.5 text-right">
+          <button type="button" onclick="testConnection('primary')" class="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-medium transition inline-flex items-center gap-1">
+            <span>⚡</span>
+            <span>Test</span>
+          </button>
+        </td>
+      </tr>
+    `);
+
+    const fallbacks = data.fallbacks || [];
+    fallbacks.forEach((fb, idx) => {
+      const masked = fb.masked_api_key || (fb.has_api_key ? "••••••••" : "Not configured");
+      rows.push(`
+        <tr class="border-b border-slate-800 hover:bg-slate-950/20 transition">
+          <td class="py-3 px-3.5">
+            <div class="flex items-center gap-1.5 font-medium text-slate-200">
+              <span class="w-2 h-2 rounded-full bg-amber-400"></span>
+              <span>${escapeHtml(fb.name || `Fallback ${idx + 1}`)}</span>
+            </div>
+            <span class="text-[10px] text-slate-500 font-mono">Priority #${idx + 1}</span>
+          </td>
+          <td class="py-3 px-3.5">
+            <div class="text-xs text-white capitalize font-semibold">${escapeHtml(fb.provider)}</div>
+            <div class="text-[11px] text-slate-400 font-mono">${escapeHtml(fb.model)}</div>
+          </td>
+          <td class="py-3 px-3.5 font-mono text-xs text-indigo-400">
+            <span>${escapeHtml(masked)}</span>
+          </td>
+          <td class="py-3 px-3.5">
+            <span class="text-[10px] font-mono px-2 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20">
+              Fallback
+            </span>
+          </td>
+          <td class="py-3 px-3.5 text-right flex items-center justify-end gap-1.5">
+            <button type="button" onclick="testConnection('${escapeHtml(fb.id)}')" class="px-2 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-medium" title="Test this fallback">
+              <span>⚡</span>
+            </button>
+            <button type="button" onclick="promoteFallback('${escapeHtml(fb.id)}')" class="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-indigo-600 text-slate-200 hover:text-white border border-slate-700 text-xs font-medium transition inline-flex items-center gap-1" title="Promote to Primary">
+              <span>⬆️</span>
+              <span>Make Primary</span>
+            </button>
+            <button type="button" onclick="deleteFallback('${escapeHtml(fb.id)}')" class="px-2 py-1 rounded-lg bg-red-950/50 hover:bg-red-900/50 text-red-300 border border-red-800/60 text-xs font-medium transition" title="Delete fallback">
+              <span>🗑️</span>
+            </button>
+          </td>
+        </tr>
+      `);
+    });
+
+    container.innerHTML = rows.join("");
+  }
+
+  function openAddFallbackModal() {
+    document.getElementById("fallbackModal").classList.remove("hidden");
+    document.getElementById("fbName").value = "";
+    document.getElementById("fbApiKey").value = "";
+    document.getElementById("fbBaseUrl").value = "";
+    onFallbackProviderChange();
+  }
+
+  function closeAddFallbackModal() {
+    document.getElementById("fallbackModal").classList.add("hidden");
+  }
+
+  function onFallbackProviderChange() {
+    const p = document.getElementById("fbProvider").value;
+    const defaultModels = {
+      groq: "llama-3.3-70b-versatile",
+      gemini: "gemini-2.5-flash",
+      openrouter: "deepseek/deepseek-r1:free",
+      openai: "gpt-4o",
+      ollama: "qwen2.5-coder:14b",
+      custom: "custom-model"
+    };
+    document.getElementById("fbModel").value = defaultModels[p] || "gemini-2.5-flash";
+  }
+
+  async function submitFallback() {
+    const owner = document.getElementById("owner").value.trim();
+    const token = document.getElementById("adminToken").value.trim();
+    if (!owner) {
+      showAlert("Owner username required.", true);
+      return;
+    }
+    const headers = { "Content-Type": "application/json" };
+    if (token) headers["X-Admin-Token"] = token;
+
+    const payload = {
+      name: document.getElementById("fbName").value.trim() || undefined,
+      provider: document.getElementById("fbProvider").value,
+      model: document.getElementById("fbModel").value.trim(),
+      api_key: document.getElementById("fbApiKey").value.trim() || null,
+      base_url: document.getElementById("fbBaseUrl").value.trim() || null,
+      is_enabled: true
+    };
+
+    try {
+      const res = await fetch(`/vault/${owner}/fallbacks`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(payload)
+      });
+      if (!res.ok) {
+        showAlert(`Failed to save fallback: ${await res.text()}`, true);
+        return;
+      }
+      closeAddFallbackModal();
+      showAlert("Fallback credential added to failover chain.");
+      await loadVault();
+    } catch (err) {
+      showAlert(`Fallback save error: ${err}`, true);
+    }
+  }
+
+  async function promoteFallback(fallbackId) {
+    const owner = document.getElementById("owner").value.trim();
+    const token = document.getElementById("adminToken").value.trim();
+    const headers = {};
+    if (token) headers["X-Admin-Token"] = token;
+
+    try {
+      const res = await fetch(`/vault/${owner}/fallbacks/${fallbackId}/set-primary`, {
+        method: "POST",
+        headers
+      });
+      if (!res.ok) {
+        showAlert(`Failed to promote fallback: ${await res.text()}`, true);
+        return;
+      }
+      showAlert("Promoted fallback to Primary LLM (previous primary demoted to fallbacks).");
+      await loadVault();
+    } catch (err) {
+      showAlert(`Promote error: ${err}`, true);
+    }
+  }
+
+  async function deleteFallback(fallbackId) {
+    if (!confirm("Are you sure you want to remove this fallback key?")) return;
+    const owner = document.getElementById("owner").value.trim();
+    const token = document.getElementById("adminToken").value.trim();
+    const headers = {};
+    if (token) headers["X-Admin-Token"] = token;
+
+    try {
+      const res = await fetch(`/vault/${owner}/fallbacks/${fallbackId}`, {
+        method: "DELETE",
+        headers
+      });
+      if (!res.ok) {
+        showAlert(`Failed to delete fallback: ${await res.text()}`, true);
+        return;
+      }
+      showAlert("Fallback key removed.");
+      await loadVault();
+    } catch (err) {
+      showAlert(`Delete error: ${err}`, true);
+    }
+  }
+
   async function loadVault() {
     const owner = document.getElementById("owner").value.trim();
     const token = document.getElementById("adminToken").value.trim();
@@ -241,9 +599,9 @@
     localStorage.setItem("cl_owner", owner);
 
     try {
-      const res = await fetch(`/vault/${owner}`, {
-        headers: { "X-Admin-Token": token }
-      });
+      const headers = {};
+      if (token) headers["X-Admin-Token"] = token;
+      const res = await fetch(`/vault/${owner}`, { headers });
       if (!res.ok) {
         showAlert(`Failed to load config (${res.status}): ${await res.text()}`, true);
         return;
@@ -264,6 +622,7 @@
         delete keyInput.dataset.savedMasked;
         document.getElementById("keyHint").textContent = "(No key saved yet)";
       }
+      renderSavedKeysTable(data);
       showAlert(`Loaded saved vault config for owner '${data.owner}'.`);
     } catch (err) {
       showAlert(`Network error: ${err}`, true);
@@ -275,10 +634,6 @@
     const token = document.getElementById("adminToken").value.trim();
     if (!owner) {
       showAlert("Please enter a GitHub Owner name.", true);
-      return;
-    }
-    if (!token) {
-      showAlert("Please enter your Admin API Token.", true);
       return;
     }
     localStorage.setItem("cl_admin_token", token);
@@ -297,12 +652,11 @@
     };
 
     try {
+      const headers = { "Content-Type": "application/json" };
+      if (token) headers["X-Admin-Token"] = token;
       const res = await fetch(`/vault/${owner}`, {
         method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Admin-Token": token
-        },
+        headers,
         body: JSON.stringify(payload)
       });
 
@@ -316,35 +670,40 @@
         keyInput.dataset.savedMasked = data.masked_api_key;
       }
       document.getElementById("keyHint").textContent = "(Key saved in vault)";
-      showAlert(`Success! Credentials for '${data.owner}' were encrypted with AES-256-GCM and saved to database.`);
+      renderSavedKeysTable(data);
+      showAlert(`Success! Credentials for '${data.owner}' were encrypted with AES-256-GCM and saved.`);
     } catch (err) {
       showAlert(`Save error: ${err}`, true);
     }
   }
 
-  async function testConnection() {
+  async function testConnection(fallbackId = null) {
     const owner = document.getElementById("owner").value.trim();
     const token = document.getElementById("adminToken").value.trim();
-    if (!owner || !token) {
-      showAlert("Please provide both Owner and Admin Token first.", true);
+    if (!owner) {
+      showAlert("Please provide Owner name.", true);
       return;
     }
 
-    // Save first to ensure latest API key is encrypted
-    await saveVault();
+    if (!fallbackId || fallbackId === "primary") {
+      await saveVault();
+    }
 
     showAlert("Pinging configured model... Testing LLM endpoint response...");
     try {
-      const res = await fetch(`/vault/${owner}/test`, {
+      const headers = {};
+      if (token) headers["X-Admin-Token"] = token;
+      const url = (fallbackId && fallbackId !== "primary") ? `/vault/${owner}/test?fallback_id=${encodeURIComponent(fallbackId)}` : `/vault/${owner}/test`;
+      const res = await fetch(url, {
         method: "POST",
-        headers: { "X-Admin-Token": token }
+        headers
       });
       const data = await res.json();
       if (!res.ok) {
         showAlert(`Connection test failed: ${data.detail || JSON.stringify(data)}`, true);
         return;
       }
-      showAlert(`[Connection Verified!]\nProvider: ${data.provider}\nModel: ${data.model}\nModel Response: "${data.reply}"`);
+      showAlert(`[Connection Verified!]\nCandidate: ${data.candidate || 'Primary'}\nProvider: ${data.provider}\nModel: ${data.model}\nModel Response: "${data.reply}"`);
     } catch (err) {
       showAlert(`Test error: ${err}`, true);
     }

@@ -249,6 +249,81 @@
         </div>
       </section>
 
+      <!-- Section: Multi-Key Fallback Architecture -->
+      <section id="fallbacks" class="space-y-4 pt-6 border-t border-white/5">
+        <div class="flex items-center gap-2">
+          <span class="material-symbols-outlined text-brand-400">shuffle</span>
+          <h2 class="text-xl font-display font-bold text-white tracking-tight">Sequential Multi-Key Failover Pipeline</h2>
+        </div>
+        <p class="text-xs text-slate-300 leading-relaxed">
+          Free-tier LLMs periodically hit rate limits (429), daily credit depletion (402), or temporary upstream outages (500/502/503/529). PatchPilot solves this with automatic, sequential provider failover:
+        </p>
+
+        <div class="space-y-3 text-xs font-mono">
+          <div class="p-4 rounded-xl bg-dark-900 border border-white/10 space-y-2">
+            <div class="text-emerald-400 font-bold">1. Primary Execution</div>
+            <p class="text-slate-400 font-sans text-xs">PatchPilot first attempts the review using your primary provider (e.g. Gemini 2.5 Pro).</p>
+          </div>
+          <div class="p-4 rounded-xl bg-dark-900 border border-white/10 space-y-2">
+            <div class="text-amber-400 font-bold">2. Trigger Detection</div>
+            <p class="text-slate-400 font-sans text-xs">If the primary returns status <code class="text-white">401, 402, 403, 404, 429, 500, 502, 503, 529</code> or times out, the failover pipeline immediately catches the error.</p>
+          </div>
+          <div class="p-4 rounded-xl bg-dark-900 border border-white/10 space-y-2">
+            <div class="text-purple-400 font-bold">3. Clean Failover Notice</div>
+            <p class="text-slate-400 font-sans text-xs">PatchPilot seamlessly switches to your secondary fallback (e.g. Groq Llama 3.3 70B), completes the review, and annotates the GitHub PR summary card with a sanitized badge without exposing internal URLs or tokens.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Section: Official Free Models Catalog -->
+      <section id="free-models" class="space-y-4 pt-6 border-t border-white/5">
+        <div class="flex items-center gap-2">
+          <span class="material-symbols-outlined text-emerald-400">verified</span>
+          <h2 class="text-xl font-display font-bold text-white tracking-tight">Official Free-Tier Models Catalog</h2>
+        </div>
+        <p class="text-xs text-slate-300 leading-relaxed">
+          PatchPilot provides 1-click presets for zero-cost developer quotas from official cloud providers. All model text fields remain 100% editable so you can also enter custom or preview model slugs:
+        </p>
+
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
+          <div class="p-4 rounded-2xl bg-dark-900 border border-white/10 space-y-2">
+            <div class="flex items-center justify-between">
+              <span class="font-display font-bold text-white">Google Gemini</span>
+              <span class="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">Free Tier</span>
+            </div>
+            <p class="text-slate-400 text-[11px]">15 RPM, 1M TPM, 1,500 RPD via Google AI Studio. 2M context on Gemini 2.5 Pro.</p>
+            <div class="font-mono text-[11px] text-brand-400">gemini-2.5-flash, gemini-2.5-pro</div>
+          </div>
+
+          <div class="p-4 rounded-2xl bg-dark-900 border border-white/10 space-y-2">
+            <div class="flex items-center justify-between">
+              <span class="font-display font-bold text-white">Groq Cloud</span>
+              <span class="text-[10px] font-mono px-2 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20">300+ tok/s</span>
+            </div>
+            <p class="text-slate-400 text-[11px]">30 RPM, 14,400 RPD ultra-low latency inference on custom Groq LPUs.</p>
+            <div class="font-mono text-[11px] text-brand-400">llama-3.3-70b-versatile, qwen-2.5-coder-32b</div>
+          </div>
+
+          <div class="p-4 rounded-2xl bg-dark-900 border border-white/10 space-y-2">
+            <div class="flex items-center justify-between">
+              <span class="font-display font-bold text-white">OpenRouter :free</span>
+              <span class="text-[10px] font-mono px-2 py-0.5 rounded bg-purple-500/10 text-purple-400 border border-purple-500/20">100% Free</span>
+            </div>
+            <p class="text-slate-400 text-[11px]">Access open-weight models including DeepSeek R1 without credit card requirement.</p>
+            <div class="font-mono text-[11px] text-brand-400">deepseek/deepseek-r1:free, meta-llama/llama-3.3-70b-instruct:free</div>
+          </div>
+
+          <div class="p-4 rounded-2xl bg-dark-900 border border-white/10 space-y-2">
+            <div class="flex items-center justify-between">
+              <span class="font-display font-bold text-white">Ollama Local</span>
+              <span class="text-[10px] font-mono px-2 py-0.5 rounded bg-blue-500/10 text-blue-400 border border-blue-500/20">Self-Hosted</span>
+            </div>
+            <p class="text-slate-400 text-[11px]">Unlimited private runs executed locally on your workstation or via Cloudflare Tunnel.</p>
+            <div class="font-mono text-[11px] text-brand-400">qwen2.5-coder:14b, llama3.1:8b</div>
+          </div>
+        </div>
+      </section>
+
     </main>
 
   </div>

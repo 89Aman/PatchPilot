@@ -137,6 +137,7 @@ def build_review_summary_card(
     walkthrough: list[dict[str, str]] | None = None,
     poem: str | None = None,
     suggested_tests: list[dict[str, str]] | None = None,
+    fallback_used: dict[str, Any] | None = None,
 ) -> str:
     """Generate rich CodeRabbit-grade Markdown summary card with review checks, walkthrough table, and test stubs."""
     verdict_clean = verdict.upper().strip()
@@ -147,6 +148,17 @@ def build_review_summary_card(
     }.get(verdict_clean, "🔍")
 
     sha_short = commit_sha[:7] if commit_sha else "HEAD"
+
+    # Failover Alert Notice (if review was completed via fallback provider)
+    failover_notice = ""
+    if fallback_used:
+        cand_provider = str(fallback_used.get("provider", "")).capitalize()
+        cand_model = fallback_used.get("model", "")
+        primary_reason = fallback_used.get("primary_reason", "Provider rate limit or outage")
+        failover_notice = (
+            f"> ⚡ **Failover Alert**: Primary LLM returned *{primary_reason}*. "
+            f"Review successfully completed via fallback: **{cand_provider}** (`{cand_model}`).\n\n"
+        )
 
     # Optional CodeRabbit Poem Banner
     poem_section = ""
@@ -225,6 +237,7 @@ def build_review_summary_card(
         f"<!-- patchpilot-ai-review -->\n"
         f"## {verdict_emoji} PatchPilot AI PR Review\n\n"
         f"**Verdict:** `{verdict_clean}` &nbsp;|&nbsp; **Commit:** `{sha_short}`\n\n"
+        f"{failover_notice}"
         f"{poem_section}"
         f"{triage_section}"
         f"{summary.strip()}\n\n"
@@ -254,6 +267,7 @@ async def publish_pr_review(
     walkthrough = review_data.get("walkthrough")
     poem = review_data.get("poem")
     suggested_tests = review_data.get("suggested_tests")
+    fallback_used = review_data.get("fallback_used")
 
     bug_count = sum(1 for f in findings if str(f.get("severity", "")).lower() == "bug")
     risk_count = sum(1 for f in findings if str(f.get("severity", "")).lower() == "risk")
@@ -272,6 +286,7 @@ async def publish_pr_review(
         walkthrough=walkthrough,
         poem=poem,
         suggested_tests=suggested_tests,
+        fallback_used=fallback_used,
     )
 
 

@@ -11,7 +11,9 @@ venv/
 *.egg-info/
 dist/
 build/
-
+brag-output/
 *.db
 .idea/
 .vscode/
+.agents/
+skills-lock.json

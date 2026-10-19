@@ -1,5 +1,6 @@
 from contextlib import asynccontextmanager
 import hmac
+import json
 import logging
 import re
 from typing import Any
@@ -24,7 +25,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.crypto import decrypt_secret, encrypt_secret
-from app.db import DEFAULT_POLICY, Base, SessionLocal, VaultConfig, engine, get_db, init_db
+from app.db import DEFAULT_POLICY, Base, SessionLocal, UserAccount, VaultConfig, engine, get_db, init_db
 from app.github_auth import (
     apply_pr_labels,
     create_session_jwt,
@@ -46,7 +47,15 @@ from app.clerk_auth import (
     fetch_clerk_user,
     verify_clerk_token,
 )
-from app.llm import annotate_diff, run_interactive_command, run_pr_review, test_llm_connection
+import uuid
+from app.llm import (
+    annotate_diff,
+    get_provider_candidates,
+    run_interactive_command,
+    run_pr_review,
+    test_llm_connection,
+)
+from app.models_catalog import OFFICIAL_FREE_MODELS
 from app.security import (
     check_pr_authorization,
     global_rate_limiter,
@@ -153,6 +162,16 @@ class VaultUpsertRequest(BaseModel):
     api_key: str | None = Field(default=None, description="Plaintext API key to encrypt. If empty, retains existing key.")
     base_url: str | None = Field(default=None, description="Custom base URL for Ollama or OpenAI endpoints")
     review_policy: str = Field(default=DEFAULT_POLICY, description="Custom Markdown review guidelines")
+
+
+class FallbackUpsertRequest(BaseModel):
+    id: str | None = Field(default=None, description="Optional ID when updating existing fallback")
+    name: str = Field(default="Secondary Fallback", description="Label for this fallback")
+    provider: str = Field(default="groq", description="gemini | groq | openrouter | openai | ollama | custom")
+    model: str = Field(default="llama-3.3-70b-versatile", description="Model slug")
+    api_key: str | None = Field(default=None, description="Plaintext API key. If empty, retains existing key.")
+    base_url: str | None = Field(default=None, description="Custom endpoint URL")
+    is_enabled: bool = Field(default=True, description="Enable or disable this candidate")
 
 
 # -----------------------------------------------------------------------------
@@ -335,10 +354,60 @@ async def auth_login():
     return RedirectResponse(url=url)
 
 
+async def _upsert_user_account(
+    db: AsyncSession,
+    *,
+    login: str,
+    name: str | None = None,
+    avatar_url: str | None = None,
+    email: str | None = None,
+    clerk_id: str | None = None,
+    github_username: str | None = None,
+    github_token: str | None = None,
+    auth_provider: str = "github",
+) -> None:
+    """Persist or update authenticated user profile and AES-256-GCM encrypted GitHub token in PostgreSQL/Supabase."""
+    login_clean = (login or "").strip().lower()
+    if not login_clean:
+        return
+    stmt = select(UserAccount).where(UserAccount.login == login_clean)
+    result = await db.execute(stmt)
+    user_rec = result.scalar_one_or_none()
+    enc_token = encrypt_secret(github_token.strip()) if (github_token and github_token.strip()) else ""
+
+    if user_rec:
+        if name:
+            user_rec.name = name
+        if avatar_url:
+            user_rec.avatar_url = avatar_url
+        if email:
+            user_rec.email = email
+        if clerk_id:
+            user_rec.clerk_id = clerk_id
+        if github_username:
+            user_rec.github_username = github_username
+        if enc_token:
+            user_rec.encrypted_github_token = enc_token
+        user_rec.auth_provider = auth_provider
+    else:
+        user_rec = UserAccount(
+            login=login_clean,
+            clerk_id=clerk_id or None,
+            github_username=github_username or login_clean,
+            email=email or None,
+            name=name or login_clean,
+            avatar_url=avatar_url or None,
+            encrypted_github_token=enc_token,
+            auth_provider=auth_provider,
+        )
+        db.add(user_rec)
+    await db.commit()
+
+
 @app.get("/auth/callback", tags=["Authentication"])
 @app.get("/auth/github/callback", tags=["Authentication"])
-async def auth_callback(request: Request, code: str):
-    """Handle OAuth callback, issue session cookie, and redirect to dashboard."""
+async def auth_callback(request: Request, code: str, db: AsyncSession = Depends(get_db)):
+    """Handle OAuth callback, persist user in Supabase PostgreSQL, issue session cookie, and redirect to dashboard."""
     client_id = settings.GITHUB_CLIENT_ID.strip()
     client_secret = settings.GITHUB_CLIENT_SECRET.strip()
     if not client_id or not client_secret:
@@ -350,6 +419,17 @@ async def auth_callback(request: Request, code: str):
     async with httpx.AsyncClient(timeout=30.0) as client:
         user_token = await exchange_oauth_code(code, client_id, client_secret, client=client)
         profile = await fetch_user_profile(user_token, client=client)
+
+    await _upsert_user_account(
+        db,
+        login=profile.get("login") or "",
+        name=profile.get("name"),
+        avatar_url=profile.get("avatar_url"),
+        email=profile.get("email"),
+        github_username=profile.get("login"),
+        github_token=user_token,
+        auth_provider="github",
+    )
 
     session_payload = {
         "login": profile.get("login"),
@@ -390,8 +470,8 @@ async def clerk_config():
 
 
 @app.post("/auth/clerk/session", tags=["Authentication"])
-async def clerk_session(request: Request, body: ClerkSessionRequest):
-    """Verify Clerk session token and establish PatchPilot session cookie."""
+async def clerk_session(request: Request, body: ClerkSessionRequest, db: AsyncSession = Depends(get_db)):
+    """Verify Clerk session token, persist user in Supabase PostgreSQL, and establish PatchPilot session cookie."""
     payload = await verify_clerk_token(body.session_token)
     if not payload:
         raise HTTPException(
@@ -407,6 +487,18 @@ async def clerk_session(request: Request, body: ClerkSessionRequest):
         github_token = await fetch_clerk_oauth_token(sub, "oauth_github") or ""
 
     identity = extract_clerk_identity(payload, clerk_user_info or body.user)
+    await _upsert_user_account(
+        db,
+        login=identity["login"],
+        name=identity["name"],
+        avatar_url=identity["avatar_url"],
+        email=(clerk_user_info or {}).get("email") or payload.get("email"),
+        clerk_id=sub,
+        github_username=identity.get("github_username") or None,
+        github_token=github_token or None,
+        auth_provider="clerk",
+    )
+
     jwt_token = create_session_jwt({
         "login": identity["login"],
         "avatar_url": identity["avatar_url"],
@@ -495,8 +587,9 @@ async def set_user_github_token(
     body: GitHubTokenRequest,
     request: Request,
     patchpilot_session: str | None = Cookie(None),
+    db: AsyncSession = Depends(get_db),
 ):
-    """Store or update GitHub access token for the authenticated session to enable repo access."""
+    """Store or update GitHub access token in Supabase PostgreSQL and session cookie to enable repo access."""
     session = verify_session_jwt(patchpilot_session)
     if not session:
         raise HTTPException(status_code=401, detail="Authentication required")
@@ -508,8 +601,20 @@ async def set_user_github_token(
     async with httpx.AsyncClient(timeout=10.0) as client:
         profile = await fetch_user_profile(clean_token, client=client)
 
+    gh_login = profile.get("login") or session.get("sub") or ""
+    await _upsert_user_account(
+        db,
+        login=gh_login,
+        name=profile.get("name") or session.get("name"),
+        avatar_url=profile.get("avatar_url") or session.get("avatar_url"),
+        clerk_id=session.get("clerk_id") or None,
+        github_username=profile.get("login"),
+        github_token=clean_token,
+        auth_provider="github",
+    )
+
     jwt_token = create_session_jwt({
-        "login": profile.get("login") or session.get("sub"),
+        "login": gh_login,
         "avatar_url": profile.get("avatar_url") or session.get("avatar_url"),
         "name": profile.get("name") or session.get("name"),
         "user_token": clean_token,
@@ -534,7 +639,10 @@ async def set_user_github_token(
 
 
 @app.get("/api/user/repos", tags=["Repositories"])
-async def get_user_repositories(patchpilot_session: str | None = Cookie(None)):
+async def get_user_repositories(
+    patchpilot_session: str | None = Cookie(None),
+    db: AsyncSession = Depends(get_db),
+):
     """Fetch repositories scoped to the authenticated user."""
     session = verify_session_jwt(patchpilot_session)
     if not session:
@@ -542,8 +650,20 @@ async def get_user_repositories(patchpilot_session: str | None = Cookie(None)):
 
     user_token = session.get("user_token")
     clerk_id = session.get("clerk_id")
+    sub_login = (session.get("sub") or "").strip().lower()
 
-    # If no token in session, check if Clerk has user's GitHub OAuth token
+    # Check PostgreSQL/Supabase users table if token not in cookie
+    if not user_token and sub_login:
+        stmt = select(UserAccount).where(UserAccount.login == sub_login)
+        result = await db.execute(stmt)
+        user_rec = result.scalar_one_or_none()
+        if user_rec and user_rec.encrypted_github_token:
+            try:
+                user_token = decrypt_secret(user_rec.encrypted_github_token)
+            except Exception:
+                user_token = ""
+
+    # If still no token, check if Clerk has user's GitHub OAuth token
     if not user_token and clerk_id and settings.clerk_secret_key:
         user_token = await fetch_clerk_oauth_token(clerk_id, "oauth_github")
 
@@ -567,6 +687,16 @@ async def get_user_repositories(patchpilot_session: str | None = Cookie(None)):
 # BYOK Vault Endpoints
 # -----------------------------------------------------------------------------
 
+def mask_api_key(key: str | None) -> str:
+    """Mask key preserving prefix/suffix, with length guard for short dummy keys."""
+    if not key or not key.strip():
+        return "Not configured"
+    k = key.strip()
+    if len(k) <= 10:
+        return f"{k[:2]}••••••••"
+    return f"{k[:6]}••••••••{k[-4:]}"
+
+
 def _mask_api_key(encrypted_key: str | None) -> str:
     """Safely decrypt and produce a masked string for UI display."""
     if not encrypted_key:
@@ -575,11 +705,35 @@ def _mask_api_key(encrypted_key: str | None) -> str:
         raw = decrypt_secret(encrypted_key)
         if not raw:
             return ""
-        if len(raw) <= 8:
-            return "••••••••"
-        return f"{raw[:4]}{'•' * min(len(raw) - 8, 16)}{raw[-4:]}"
+        return mask_api_key(raw)
     except Exception:
         return "••••••••"
+
+
+def _serialize_fallbacks(fallbacks_json: str | None) -> list[dict[str, Any]]:
+    """Parse and sanitize fallbacks JSON for client response without raw secret leakage."""
+    if not fallbacks_json:
+        return []
+    try:
+        raw = json.loads(fallbacks_json)
+        if isinstance(raw, list):
+            res = []
+            for item in raw:
+                if isinstance(item, dict):
+                    res.append({
+                        "id": str(item.get("id", "")),
+                        "name": str(item.get("name", "Fallback")),
+                        "provider": str(item.get("provider", "gemini")),
+                        "model": str(item.get("model", "")),
+                        "base_url": item.get("base_url") or "",
+                        "has_api_key": bool(item.get("encrypted_api_key")),
+                        "masked_api_key": _mask_api_key(item.get("encrypted_api_key")),
+                        "is_enabled": bool(item.get("is_enabled", True)),
+                    })
+            return res
+    except Exception as exc:
+        logger.warning("Error parsing fallbacks_json: %s", exc)
+    return []
 
 
 @app.get("/vault/{owner}", tags=["Vault"])
@@ -588,7 +742,7 @@ async def get_vault(
     _: None = Depends(verify_admin_or_session),
     db: AsyncSession = Depends(get_db),
 ):
-    """Retrieve owner vault metadata without exposing raw API keys."""
+    """Retrieve owner vault metadata, configured fallbacks, and official free models catalog."""
     owner_clean = owner.strip().lower()
     stmt = select(VaultConfig).where(VaultConfig.owner == owner_clean)
     result = await db.execute(stmt)
@@ -603,6 +757,8 @@ async def get_vault(
             "has_api_key": False,
             "masked_api_key": "",
             "review_policy": DEFAULT_POLICY,
+            "fallbacks": [],
+            "free_models": OFFICIAL_FREE_MODELS,
         }
 
     return {
@@ -613,6 +769,8 @@ async def get_vault(
         "has_api_key": bool(cfg.encrypted_api_key),
         "masked_api_key": _mask_api_key(cfg.encrypted_api_key),
         "review_policy": cfg.review_policy,
+        "fallbacks": _serialize_fallbacks(cfg.fallbacks_json),
+        "free_models": OFFICIAL_FREE_MODELS,
         "updated_at": cfg.updated_at.isoformat() if cfg.updated_at else None,
     }
 
@@ -624,7 +782,7 @@ async def upsert_vault(
     _: None = Depends(verify_admin_or_session),
     db: AsyncSession = Depends(get_db),
 ):
-    """Upsert BYOK vault configuration for an owner."""
+    """Upsert BYOK primary vault configuration for an owner."""
     owner_clean = owner.strip().lower()
     if not owner_clean:
         raise HTTPException(status_code=400, detail="Owner cannot be empty")
@@ -653,6 +811,7 @@ async def upsert_vault(
             encrypted_api_key=encrypted_key,
             base_url=body.base_url.strip() if body.base_url else None,
             review_policy=body.review_policy.strip(),
+            fallbacks_json="[]",
         )
         db.add(cfg)
 
@@ -667,17 +826,190 @@ async def upsert_vault(
         "has_api_key": bool(cfg.encrypted_api_key),
         "masked_api_key": _mask_api_key(cfg.encrypted_api_key),
         "review_policy": cfg.review_policy,
+        "fallbacks": _serialize_fallbacks(cfg.fallbacks_json),
+        "free_models": OFFICIAL_FREE_MODELS,
         "updated_at": cfg.updated_at.isoformat() if cfg.updated_at else None,
+    }
+
+
+@app.post("/vault/{owner}/fallbacks", tags=["Vault"])
+async def add_or_update_fallback(
+    owner: str,
+    body: FallbackUpsertRequest,
+    _: None = Depends(verify_admin_or_session),
+    db: AsyncSession = Depends(get_db),
+):
+    """Add or update a secondary fallback LLM credential."""
+    owner_clean = owner.strip().lower()
+    stmt = select(VaultConfig).where(VaultConfig.owner == owner_clean)
+    result = await db.execute(stmt)
+    cfg = result.scalar_one_or_none()
+    if not cfg:
+        raise HTTPException(status_code=404, detail=f"No vault configuration found for owner '{owner_clean}'. Save primary vault first.")
+
+    raw_fbs: list[dict[str, Any]] = []
+    if cfg.fallbacks_json:
+        try:
+            parsed = json.loads(cfg.fallbacks_json)
+            if isinstance(parsed, list):
+                raw_fbs = parsed
+        except Exception:
+            raw_fbs = []
+
+    target_id = body.id
+    existing_idx = -1
+    if target_id:
+        for i, fb in enumerate(raw_fbs):
+            if str(fb.get("id")) == str(target_id):
+                existing_idx = i
+                break
+
+    if existing_idx >= 0:
+        fb_item = raw_fbs[existing_idx]
+        fb_item["name"] = body.name.strip()
+        fb_item["provider"] = body.provider.lower().strip()
+        fb_item["model"] = body.model.strip()
+        fb_item["base_url"] = body.base_url.strip() if body.base_url else None
+        fb_item["is_enabled"] = body.is_enabled
+        if body.api_key and body.api_key.strip():
+            fb_item["encrypted_api_key"] = encrypt_secret(body.api_key.strip())
+    else:
+        new_id = uuid.uuid4().hex[:8]
+        enc_key = encrypt_secret(body.api_key.strip()) if (body.api_key and body.api_key.strip()) else ""
+        fb_item = {
+            "id": new_id,
+            "name": body.name.strip() or f"Fallback {len(raw_fbs) + 1}",
+            "provider": body.provider.lower().strip(),
+            "model": body.model.strip(),
+            "encrypted_api_key": enc_key,
+            "base_url": body.base_url.strip() if body.base_url else None,
+            "is_enabled": body.is_enabled,
+        }
+        raw_fbs.append(fb_item)
+
+    cfg.fallbacks_json = json.dumps(raw_fbs)
+    await db.commit()
+    await db.refresh(cfg)
+
+    return {
+        "status": "ok",
+        "fallbacks": _serialize_fallbacks(cfg.fallbacks_json),
+    }
+
+
+@app.delete("/vault/{owner}/fallbacks/{fallback_id}", tags=["Vault"])
+async def delete_fallback(
+    owner: str,
+    fallback_id: str,
+    _: None = Depends(verify_admin_or_session),
+    db: AsyncSession = Depends(get_db),
+):
+    """Remove a fallback credential from vault."""
+    owner_clean = owner.strip().lower()
+    stmt = select(VaultConfig).where(VaultConfig.owner == owner_clean)
+    result = await db.execute(stmt)
+    cfg = result.scalar_one_or_none()
+    if not cfg:
+        raise HTTPException(status_code=404, detail="Vault not found")
+
+    raw_fbs = []
+    if cfg.fallbacks_json:
+        try:
+            parsed = json.loads(cfg.fallbacks_json)
+            if isinstance(parsed, list):
+                raw_fbs = [fb for fb in parsed if str(fb.get("id")) != str(fallback_id)]
+        except Exception:
+            raw_fbs = []
+
+    cfg.fallbacks_json = json.dumps(raw_fbs)
+    await db.commit()
+    await db.refresh(cfg)
+
+    return {
+        "status": "ok",
+        "deleted": True,
+        "fallbacks": _serialize_fallbacks(cfg.fallbacks_json),
+    }
+
+
+@app.post("/vault/{owner}/fallbacks/{fallback_id}/set-primary", tags=["Vault"])
+@app.post("/vault/{owner}/fallback/{fallback_id}/set-primary", tags=["Vault"])
+async def promote_fallback_to_primary(
+    owner: str,
+    fallback_id: str,
+    _: None = Depends(verify_admin_or_session),
+    db: AsyncSession = Depends(get_db),
+):
+    """Promote selected fallback to primary and demote current primary into fallbacks list with auto-generated UUID and descriptive label."""
+    owner_clean = owner.strip().lower()
+    stmt = select(VaultConfig).where(VaultConfig.owner == owner_clean)
+    result = await db.execute(stmt)
+    cfg = result.scalar_one_or_none()
+    if not cfg:
+        raise HTTPException(status_code=404, detail="Vault not found")
+
+    raw_fbs: list[dict[str, Any]] = []
+    if cfg.fallbacks_json:
+        try:
+            parsed = json.loads(cfg.fallbacks_json)
+            if isinstance(parsed, list):
+                raw_fbs = parsed
+        except Exception:
+            raw_fbs = []
+
+    target_idx = -1
+    for i, fb in enumerate(raw_fbs):
+        if str(fb.get("id")) == str(fallback_id):
+            target_idx = i
+            break
+
+    if target_idx < 0:
+        raise HTTPException(status_code=404, detail=f"Fallback '{fallback_id}' not found")
+
+    target_fb = raw_fbs.pop(target_idx)
+
+    # Demote old primary into a fallback entry with generated uuid4 and label
+    old_provider_title = cfg.provider.capitalize()
+    demoted_primary = {
+        "id": uuid.uuid4().hex[:8],
+        "name": f"Previous Primary ({old_provider_title})",
+        "provider": cfg.provider,
+        "model": cfg.model,
+        "encrypted_api_key": cfg.encrypted_api_key,
+        "base_url": cfg.base_url,
+        "is_enabled": True,
+    }
+
+    # Promote target fallback to primary
+    cfg.provider = target_fb["provider"]
+    cfg.model = target_fb["model"]
+    cfg.encrypted_api_key = target_fb.get("encrypted_api_key", "")
+    cfg.base_url = target_fb.get("base_url")
+
+    # Insert demoted primary at the top of fallbacks
+    raw_fbs.insert(0, demoted_primary)
+    cfg.fallbacks_json = json.dumps(raw_fbs)
+
+    await db.commit()
+    await db.refresh(cfg)
+
+    return {
+        "status": "ok",
+        "provider": cfg.provider,
+        "model": cfg.model,
+        "masked_api_key": _mask_api_key(cfg.encrypted_api_key),
+        "fallbacks": _serialize_fallbacks(cfg.fallbacks_json),
     }
 
 
 @app.post("/vault/{owner}/test", tags=["Vault"])
 async def test_vault_endpoint(
     owner: str,
+    fallback_id: str | None = None,
     _: None = Depends(verify_admin_or_session),
     db: AsyncSession = Depends(get_db),
 ):
-    """Test live LLM connection with configured credentials."""
+    """Test live LLM connection for primary or specified fallback credential."""
     owner_clean = owner.strip().lower()
     stmt = select(VaultConfig).where(VaultConfig.owner == owner_clean)
     result = await db.execute(stmt)
@@ -686,11 +1018,32 @@ async def test_vault_endpoint(
     if not cfg:
         raise HTTPException(status_code=404, detail=f"No vault configuration found for owner '{owner_clean}'. Save first.")
 
+    candidates = get_provider_candidates(cfg)
+    target_cand = None
+    if fallback_id and fallback_id != "primary":
+        for c in candidates:
+            if str(c.get("id")) == str(fallback_id):
+                target_cand = c
+                break
+        if not target_cand:
+            raise HTTPException(status_code=404, detail=f"Fallback ID '{fallback_id}' not found")
+    else:
+        target_cand = candidates[0] if candidates else None
+
     try:
-        reply = await test_llm_connection(cfg)
-        return {"status": "ok", "provider": cfg.provider, "model": cfg.model, "reply": reply}
+        reply = await test_llm_connection(cfg, candidate=target_cand)
+        cand_name = target_cand["name"] if target_cand else "Primary"
+        cand_provider = target_cand["provider"] if target_cand else cfg.provider
+        cand_model = target_cand["model"] if target_cand else cfg.model
+        return {
+            "status": "ok",
+            "candidate": cand_name,
+            "provider": cand_provider,
+            "model": cand_model,
+            "reply": reply,
+        }
     except Exception as exc:
-        logger.error("Connection test error for %s: %s", owner_clean, exc)
+        logger.error("Connection test error for %s (%s): %s", owner_clean, fallback_id or "primary", exc)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 

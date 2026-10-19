@@ -355,40 +355,53 @@ async def test_dashboard_page():
 @pytest.mark.asyncio
 async def test_vault_admin_token_protection():
     """Verify that vault endpoints reject requests without a valid X-Admin-Token or session."""
+    from sqlalchemy import delete
+    from app.db import SessionLocal, UserAccount, VaultConfig, init_db
     from app.main import app
 
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
-        # Missing token
-        res_missing = await client.get("/vault/test-owner")
-        assert res_missing.status_code == 401
+    await init_db()
+    async with SessionLocal() as db:
+        await db.execute(delete(VaultConfig).where(VaultConfig.owner.in_(["test-owner", "clerkuser", "clerkdev"])))
+        await db.execute(delete(UserAccount).where(UserAccount.login.in_(["test-owner", "clerkuser", "clerkdev", "octocat-dev"])))
+        await db.commit()
 
-        # Invalid token
-        res_invalid = await client.get("/vault/test-owner", headers={"X-Admin-Token": "bad-token"})
-        assert res_invalid.status_code == 401
+    try:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            # Missing token
+            res_missing = await client.get("/vault/test-owner")
+            assert res_missing.status_code == 401
 
-        # Valid token
-        from app.config import settings
-        res_valid = await client.get("/vault/test-owner", headers={"X-Admin-Token": settings.ADMIN_API_TOKEN})
-        assert res_valid.status_code == 200
-        assert res_valid.json()["owner"] == "test-owner"
-        assert res_valid.json()["masked_api_key"] == ""
+            # Invalid token
+            res_invalid = await client.get("/vault/test-owner", headers={"X-Admin-Token": "bad-token"})
+            assert res_invalid.status_code == 401
 
-        # Save API key and verify masked_api_key returned
-        res_put = await client.put(
-            "/vault/test-owner",
-            headers={"X-Admin-Token": settings.ADMIN_API_TOKEN},
-            json={"provider": "groq", "model": "llama-3.1-8b-instant", "api_key": "gsk_1234567890abcdef", "review_policy": "standard"},
-        )
-        assert res_put.status_code == 200
-        assert res_put.json()["has_api_key"] is True
-        masked = res_put.json()["masked_api_key"]
-        assert masked.startswith("gsk_")
-        assert masked.endswith("cdef")
-        assert "•" in masked
+            # Valid token
+            from app.config import settings
+            res_valid = await client.get("/vault/test-owner", headers={"X-Admin-Token": settings.ADMIN_API_TOKEN})
+            assert res_valid.status_code == 200
+            assert res_valid.json()["owner"] == "test-owner"
+            assert res_valid.json()["masked_api_key"] == ""
 
-        # Verify GET also returns masked key
-        res_get_again = await client.get("/vault/test-owner", headers={"X-Admin-Token": settings.ADMIN_API_TOKEN})
-        assert res_get_again.json()["masked_api_key"] == masked
+            # Save API key and verify masked_api_key returned
+            res_put = await client.put(
+                "/vault/test-owner",
+                headers={"X-Admin-Token": settings.ADMIN_API_TOKEN},
+                json={"provider": "groq", "model": "llama-3.1-8b-instant", "api_key": "gsk_1234567890abcdef", "review_policy": "standard"},
+            )
+            assert res_put.status_code == 200
+            assert res_put.json()["has_api_key"] is True
+            masked = res_put.json()["masked_api_key"]
+            assert masked.startswith("gsk_")
+            assert masked.endswith("cdef")
+            assert "•" in masked
+
+            # Verify GET also returns masked key
+            res_get_again = await client.get("/vault/test-owner", headers={"X-Admin-Token": settings.ADMIN_API_TOKEN})
+            assert res_get_again.json()["masked_api_key"] == masked
+    finally:
+        async with SessionLocal() as db:
+            await db.execute(delete(VaultConfig).where(VaultConfig.owner == "test-owner"))
+            await db.commit()
 
 
 @pytest.mark.asyncio

@@ -1,10 +1,7 @@
-import asyncio
 from collections.abc import AsyncGenerator
 from datetime import datetime, timezone
 import logging
-import os
-import sys
-from sqlalchemy import DateTime, String, Text
+from sqlalchemy import DateTime, String, Text, inspect, text
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
@@ -39,6 +36,7 @@ class VaultConfig(Base):
     encrypted_api_key: Mapped[str] = mapped_column(Text, nullable=False, default="")
     base_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     review_policy: Mapped[str] = mapped_column(Text, nullable=False, default=DEFAULT_POLICY)
+    fallbacks_json: Mapped[str | None] = mapped_column(Text, nullable=True, default="[]")
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
@@ -47,36 +45,51 @@ class VaultConfig(Base):
     )
 
 
-from sqlalchemy.pool import StaticPool
+class UserAccount(Base):
+    """Authenticated user profile and AES-256-GCM encrypted OAuth/PAT credentials stored in Supabase PostgreSQL."""
+
+    __tablename__ = "users"
+
+    login: Mapped[str] = mapped_column(String(255), primary_key=True, index=True)
+    clerk_id: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    github_username: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    email: Mapped[str | None] = mapped_column(String(320), nullable=True)
+    name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    avatar_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    encrypted_github_token: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    auth_provider: Mapped[str] = mapped_column(String(50), nullable=False, default="github")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+
+from sqlalchemy.pool import NullPool
 
 settings = get_settings()
 
-db_url = settings.DATABASE_URL
-connect_args: dict[str, object] = {}
-engine_kwargs: dict[str, object] = {
-    "echo": False,
-    "future": True,
-}
-
-# Convert standard postgresql URL to asyncpg driver
-if db_url.startswith("postgresql://"):
+db_url = settings.DATABASE_URL.strip()
+if db_url.startswith("postgres://"):
+    db_url = db_url.replace("postgres://", "postgresql+asyncpg://", 1)
+elif db_url.startswith("postgresql://"):
     db_url = db_url.replace("postgresql://", "postgresql+asyncpg://", 1)
 
-if "asyncpg" in db_url:
-    # Disable prepared statement caching for Supabase PgBouncer transaction mode compatibility
-    connect_args["prepared_statement_cache_size"] = 0
+if not db_url.startswith("postgresql+asyncpg://"):
+    raise ValueError("DATABASE_URL must be a valid PostgreSQL/Supabase connection URL (postgresql://...)")
 
-# Check testing override
-is_test = os.environ.get("TESTING") == "1" or "pytest" in sys.modules or bool(os.environ.get("PYTEST_CURRENT_TEST"))
-if is_test:
-    db_url = "sqlite+aiosqlite:///:memory:"
-    connect_args = {"check_same_thread": False}
-    engine_kwargs["poolclass"] = StaticPool
+connect_args: dict[str, object] = {
+    # Disable prepared statement caching for Supabase PgBouncer transaction mode compatibility
+    "prepared_statement_cache_size": 0,
+}
 
 engine = create_async_engine(
     db_url,
+    echo=False,
+    future=True,
+    poolclass=NullPool,
     connect_args=connect_args,
-    **engine_kwargs,
 )
 
 async_session_maker = async_sessionmaker(
@@ -92,39 +105,31 @@ SessionLocal = async_session_maker
 _tables_created = False
 
 
-async def init_db() -> None:
-    """Initialize database schema asynchronously with graceful offline fallback."""
-    global engine, async_session_maker, SessionLocal, _tables_created
+def _migrate_vault_columns(conn) -> None:
+    """Safely migrate missing columns in PostgreSQL/Supabase."""
     try:
-        async def _run_init():
-            async with engine.begin() as conn:
-                await conn.run_sync(Base.metadata.create_all)
-
-        await asyncio.wait_for(_run_init(), timeout=4.0)
-        _tables_created = True
-        logger.info("Database tables verified and initialized successfully.")
+        inspector = inspect(conn)
+        tables = inspector.get_table_names()
+        if "vault_configs" in tables:
+            columns = [c["name"] for c in inspector.get_columns("vault_configs")]
+            if "fallbacks_json" not in columns:
+                conn.execute(text("ALTER TABLE vault_configs ADD COLUMN fallbacks_json TEXT DEFAULT '[]'"))
     except Exception as exc:
-        logger.warning("Remote database unavailable (%s). Initializing local SQLite fallback.", exc)
-        engine = create_async_engine(
-            "sqlite+aiosqlite:///./vault.db",
-            echo=False,
-            future=True,
-            connect_args={"check_same_thread": False},
-        )
-        async_session_maker = async_sessionmaker(
-            bind=engine,
-            class_=AsyncSession,
-            expire_on_commit=False,
-            autoflush=False,
-        )
-        SessionLocal = async_session_maker
-        async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
-        _tables_created = True
+        logger.warning("Vault schema column check notice: %s", exc)
+
+
+async def init_db() -> None:
+    """Initialize PostgreSQL/Supabase database schema asynchronously."""
+    global _tables_created
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(_migrate_vault_columns)
+    _tables_created = True
+    logger.info("PostgreSQL/Supabase tables (vault_configs, users) verified and initialized.")
 
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
-    """FastAPI dependency yielding an async database session."""
+    """FastAPI dependency yielding an async PostgreSQL database session."""
     global _tables_created
     if not _tables_created:
         await init_db()
