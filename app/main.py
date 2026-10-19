@@ -63,7 +63,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("patchpilot")
 
 COMMAND_RE = re.compile(
-    r"(?:@patchpilot[\w-]*|@contextlens[\w-]*|/lens|/patchpilot)\s+(explain|fix|review(?:\s+(?:security|perf|bugs?))?|generate\s+tests?|test|tests)\b(.*)$",
+    r"(?:@patchpilot[\w-]*(?:\[bot\])?|@contextlens[\w-]*(?:\[bot\])?|/lens|/patchpilot)\s+(explain|fix|review(?:\s+(?:security|perf|bugs?))?|generate\s+tests?|test|tests)\b(.*)$",
     re.IGNORECASE | re.DOTALL,
 )
 
@@ -755,7 +755,7 @@ async def handle_pr_event(payload: dict[str, Any]) -> None:
             # 4. Sanitize diff before LLM processing if secrets were detected
             clean_annotated_diff = sanitize_diff_text(annotated_diff, secret_findings) if secret_count > 0 else annotated_diff
 
-            # 5. Run Specialist Multi-Agent Review with clean diff
+            # 5. Run AI PR Review with clean diff
             review_data = await run_pr_review(
                 cfg=cfg,
                 pr_title=pr_title,

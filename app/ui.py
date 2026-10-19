@@ -470,7 +470,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       gemini: ["gemini-2.5-pro", "gemini-2.5-flash"],
       openrouter: ["anthropic/claude-3.7-sonnet", "deepseek/deepseek-chat-v3-0324", "openai/gpt-4o", "x-ai/grok-3"],
       openai: ["gpt-4o", "gpt-4.1", "o3-mini"],
-      groq: ["llama-3.3-70b-versatile", "deepseek-r1-distill-llama-70b", "qwen-2.5-coder-32b"],
+      groq: ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "openai/gpt-oss-120b"],
       grok: ["grok-3", "grok-3-mini", "grok-2-latest"],
       ollama: ["qwen2.5-coder:14b", "deepseek-coder-v2:16b", "llama3.1:8b"],
       custom: []

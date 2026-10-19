@@ -165,6 +165,41 @@ def extract_json_payload(content: str) -> dict[str, Any]:
         }
 
 
+def _check_response_status(resp: httpx.Response, cfg: VaultConfig) -> None:
+    """Validate HTTP response and extract upstream provider error messages."""
+    if resp.is_error:
+        provider = (cfg.provider or "API").capitalize()
+        error_msg = ""
+        try:
+            body = resp.json()
+            if isinstance(body, dict):
+                error_obj = body.get("error", {})
+                if isinstance(error_obj, dict):
+                    error_msg = error_obj.get("message", "")
+                elif isinstance(error_obj, str):
+                    error_msg = error_obj
+                if not error_msg:
+                    error_msg = str(body.get("detail", ""))
+        except Exception:
+            pass
+
+        if not error_msg:
+            error_msg = resp.text[:200]
+
+        if resp.status_code == 404:
+            raise ValueError(
+                f"{provider} returned 404 Not Found: '{error_msg or 'Resource or model not found'}'. "
+                f"Verify model '{cfg.model}' exists and is currently active on {provider}. "
+                f"Recommended active Groq models: 'llama-3.3-70b-versatile', 'llama-3.1-8b-instant'."
+            )
+        elif resp.status_code == 401:
+            raise ValueError(f"{provider} returned 401 Unauthorized: Invalid API key.")
+        elif resp.status_code == 429:
+            raise ValueError(f"{provider} rate limit reached (429): {error_msg}")
+        else:
+            raise ValueError(f"{provider} error ({resp.status_code}): {error_msg}")
+
+
 async def test_llm_connection(cfg: VaultConfig, client: httpx.AsyncClient | None = None) -> str:
     """Test connection to the configured LLM provider and return response."""
     url, headers = _resolve_endpoint_and_headers(cfg)
@@ -182,12 +217,13 @@ async def test_llm_connection(cfg: VaultConfig, client: httpx.AsyncClient | None
 
     try:
         resp = await client.post(url, headers=headers, json=payload)
-        resp.raise_for_status()
+        _check_response_status(resp, cfg)
         data = resp.json()
         return data["choices"][0]["message"]["content"].strip()
     finally:
         if close_client:
             await client.aclose()
+
 
 
 async def run_pr_review(
@@ -198,31 +234,27 @@ async def run_pr_review(
     client: httpx.AsyncClient | None = None,
     valid_lines: dict[str, set[int]] | None = None,
     triage: Any | None = None,
-    use_agent_team: bool = True,
 ) -> dict[str, Any]:
-    """Execute AI review of pull request using specialized multi-agent squad or single prompt fallback."""
-    if use_agent_team and valid_lines is not None:
-        from app.agents import global_agent_team
-        return await global_agent_team.run_review(
-            cfg=cfg,
-            pr_title=pr_title,
-            pr_body=pr_body,
-            annotated_diff=annotated_diff,
-            valid_lines=valid_lines,
-            triage=triage,
-            client=client,
-        )
-
-    # Legacy single-prompt fallback
+    """Execute unified AI review of pull request with CodeRabbit-grade walkthrough, suggestions, and test stubs."""
     url, headers = _resolve_endpoint_and_headers(cfg)
 
     policy_section = cfg.review_policy or ""
     system_prompt = (
-        "You are PatchPilot AI, an expert code reviewer.\n"
+        "You are PatchPilot, an expert AI pull request reviewer modeled after CodeRabbit.\n"
         f"{policy_section}\n\n"
+        "Analyze the pull request changes thoroughly across Architecture, Security (OWASP), Bug/Logic Correctness, "
+        "Performance (O(N^2), DB N+1, I/O), and Test Coverage.\n\n"
         "Return strictly valid JSON matching this schema:\n"
         "{\n"
         '  "summary": "High-level summary of the PR and overall code quality.",\n'
+        '  "poem": "Optional clever 2-line rhyming summary of the changes.",\n'
+        '  "walkthrough": [\n'
+        "    {\n"
+        '      "file": "path/to/file.ext",\n'
+        '      "impact": "✨ Feature | 🐛 Fix | ⚡ Perf | 📝 Docs | 🧹 Refactor | 🛡️ Security",\n'
+        '      "summary": "One concise sentence describing what changed in this specific file."\n'
+        "    }\n"
+        "  ],\n"
         '  "verdict": "PASS|WARN|BLOCK",\n'
         '  "findings": [\n'
         "    {\n"
@@ -231,7 +263,14 @@ async def run_pr_review(
         '      "severity": "bug|risk|nit",\n'
         '      "title": "Short title describing the issue",\n'
         '      "explanation": "Detailed explanation of why this is an issue and how to resolve it",\n'
-        '      "suggestion": "Optional replacement code line or empty string"\n'
+        '      "suggestion": "Optional exact replacement code line(s) or empty string"\n'
+        "    }\n"
+        "  ],\n"
+        '  "suggested_tests": [\n'
+        "    {\n"
+        '      "target_file": "path/to/file.ext",\n'
+        '      "description": "Untested edge-case or failure mode description",\n'
+        '      "code_snippet": "Runnable unit test function in project language"\n'
         "    }\n"
         "  ]\n"
         "}\n\n"
@@ -263,9 +302,53 @@ async def run_pr_review(
 
     try:
         resp = await client.post(url, headers=headers, json=payload)
-        resp.raise_for_status()
+        _check_response_status(resp, cfg)
         content = resp.json()["choices"][0]["message"]["content"]
-        return extract_json_payload(content)
+        data = extract_json_payload(content)
+
+        raw_findings = data.get("findings", [])
+        clean_findings: list[dict[str, Any]] = []
+
+        # Filter against valid lines to prevent hallucinated line comments
+        for f in raw_findings:
+            if not isinstance(f, dict):
+                continue
+            file_path = f.get("file")
+            line = f.get("line")
+            if not file_path or line is None:
+                continue
+
+            if valid_lines is not None:
+                valid_for_file = valid_lines.get(str(file_path), set())
+                if int(line) not in valid_for_file:
+                    continue
+
+            clean_findings.append({
+                "file": str(file_path),
+                "line": int(line),
+                "severity": str(f.get("severity", "risk")).lower(),
+                "title": str(f.get("title", "")),
+                "explanation": str(f.get("explanation", "")),
+                "suggestion": str(f.get("suggestion", "")),
+            })
+
+        data["findings"] = clean_findings
+
+        # Calculate review check category statuses
+        bugs = sum(1 for f in clean_findings if f["severity"] == "bug")
+        risks = sum(1 for f in clean_findings if f["severity"] == "risk")
+        suggested_tests = data.get("suggested_tests", [])
+
+        checks = {
+            "🛡️ Security": "🟢 Clean" if not any("security" in f["title"].lower() or "secret" in f["title"].lower() for f in clean_findings) else "🔴 Issues Found",
+            "🐞 Correctness": f"🟡 {bugs} Defect{'s' if bugs > 1 else ''}" if bugs > 0 else "🟢 Clean",
+            "⚡ Performance": "🟡 Review Needed" if any("perf" in f["title"].lower() or "o(n" in f["title"].lower() for f in clean_findings) else "🟢 Optimal",
+            "🧪 Test Coverage": f"🧪 {len(suggested_tests)} Test Case{'s' if len(suggested_tests) > 1 else ''} Suggested" if suggested_tests else "🟢 Adequate",
+        }
+        data["review_checks"] = checks
+        data["agent_statuses"] = checks  # Backward compatibility alias
+
+        return data
     finally:
         if close_client:
             await client.aclose()
@@ -280,32 +363,26 @@ async def run_interactive_command(
     pr_diff: str,
     client: httpx.AsyncClient | None = None,
 ) -> str:
-    """Execute interactive @patchpilot explain, fix, review (security/perf), or generate tests command."""
+    """Execute interactive @patchpilot explain, fix, review, or generate tests command."""
     url, headers = _resolve_endpoint_and_headers(cfg)
     cmd_lower = command.lower().strip()
 
     if "explain" in cmd_lower:
         mode_instruction = "Explain the code, root cause, and architectural trade-offs concisely."
-        agent_role = "Senior Architect & Code Explainer"
     elif "fix" in cmd_lower:
         mode_instruction = "Provide the exact fix with clear markdown code blocks and git suggestion syntax if applicable."
-        agent_role = "Bug Hunter & Code Fixer"
     elif "security" in cmd_lower:
         mode_instruction = "Perform an in-depth security and vulnerability audit (OWASP, injections, auth bypass, data leaks)."
-        agent_role = "Senior Application Security Specialist"
     elif "perf" in cmd_lower:
         mode_instruction = "Analyze algorithmic complexity, database query patterns (N+1), memory bloat, and I/O efficiency."
-        agent_role = "Staff Performance Engineer"
     elif any(k in cmd_lower for k in ["test", "tests"]):
         mode_instruction = "Generate concrete, runnable unit test functions covering untested branches and edge cases."
-        agent_role = "Senior QA Automation Engineer"
     else:
         mode_instruction = "Review the requested code changes constructively and objectively."
-        agent_role = "Specialist AI Reviewer"
 
     system_prompt = (
         f"{cfg.review_policy or ''}\n\n"
-        f"You are the PatchPilot {agent_role} replying to an interactive `@patchpilot {command}` command on GitHub.\n"
+        f"You are PatchPilot responding to an interactive `{command}` command on a GitHub Pull Request.\n"
         f"{mode_instruction}"
     )
 
@@ -333,7 +410,7 @@ async def run_interactive_command(
 
     try:
         resp = await client.post(url, headers=headers, json=payload)
-        resp.raise_for_status()
+        _check_response_status(resp, cfg)
         return resp.json()["choices"][0]["message"]["content"]
     finally:
         if close_client:

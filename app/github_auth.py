@@ -133,11 +133,12 @@ def build_review_summary_card(
     triage_summary: str | None = None,
     secret_alerts_count: int = 0,
     agent_statuses: dict[str, str] | None = None,
+    review_checks: dict[str, str] | None = None,
     walkthrough: list[dict[str, str]] | None = None,
     poem: str | None = None,
     suggested_tests: list[dict[str, str]] | None = None,
 ) -> str:
-    """Generate rich CodeRabbit-grade Markdown summary card with squad badges, walkthrough table, and test stubs."""
+    """Generate rich CodeRabbit-grade Markdown summary card with review checks, walkthrough table, and test stubs."""
     verdict_clean = verdict.upper().strip()
     verdict_emoji = {
         "PASS": "🟢",
@@ -157,17 +158,19 @@ def build_review_summary_card(
     if triage_summary:
         triage_section = f"### 🏷️ Triage & Impact\n\n{triage_summary}\n\n"
 
-    # Specialist Squad Matrix Badges
-    squad_section = ""
-    if agent_statuses:
-        rows = [f"| **{agent}** | {status} |" for agent, status in agent_statuses.items()]
-        squad_section = (
-            "### 🤖 Specialist Agent Squad\n\n"
-            "| Specialist Role | Status |\n"
+    # Review Checks Matrix Badges
+    checks_dict = review_checks or agent_statuses
+    checks_section = ""
+    if checks_dict:
+        rows = [f"| **{category}** | {status} |" for category, status in checks_dict.items()]
+        checks_section = (
+            "### 🎯 Review Checks\n\n"
+            "| Category | Status |\n"
             "| :--- | :--- |\n"
             + "\n".join(rows)
             + "\n\n"
         )
+
 
     # File Walkthrough Table
     walkthrough_section = ""
@@ -225,7 +228,7 @@ def build_review_summary_card(
         f"{poem_section}"
         f"{triage_section}"
         f"{summary.strip()}\n\n"
-        f"{squad_section}"
+        f"{checks_section}"
         f"{walkthrough_section}"
         f"{findings_section}"
         f"{tests_section}"
