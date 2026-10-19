@@ -66,30 +66,45 @@ class UserAccount(Base):
     )
 
 
-from sqlalchemy.pool import NullPool
+import os
+import sys
+from sqlalchemy.pool import NullPool, StaticPool
 
 settings = get_settings()
 
-db_url = settings.DATABASE_URL.strip()
-if db_url.startswith("postgres://"):
-    db_url = db_url.replace("postgres://", "postgresql+asyncpg://", 1)
-elif db_url.startswith("postgresql://"):
-    db_url = db_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+is_test = (
+    os.environ.get("TESTING") == "1"
+    or "pytest" in sys.modules
+    or bool(os.environ.get("PYTEST_CURRENT_TEST"))
+)
 
-if not db_url.startswith("postgresql+asyncpg://"):
-    raise ValueError("DATABASE_URL must be a valid PostgreSQL/Supabase connection URL (postgresql://...)")
-
-connect_args: dict[str, object] = {
-    # Disable prepared statement caching for Supabase PgBouncer transaction mode compatibility
-    "prepared_statement_cache_size": 0,
+connect_args: dict[str, object] = {}
+engine_kwargs: dict[str, object] = {
+    "echo": False,
+    "future": True,
 }
+
+if is_test:
+    db_url = "sqlite+aiosqlite:///:memory:"
+    connect_args["check_same_thread"] = False
+    engine_kwargs["poolclass"] = StaticPool
+else:
+    db_url = settings.DATABASE_URL.strip()
+    if db_url.startswith("postgres://"):
+        db_url = db_url.replace("postgres://", "postgresql+asyncpg://", 1)
+    elif db_url.startswith("postgresql://"):
+        db_url = db_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+
+    if not db_url.startswith("postgresql+asyncpg://"):
+        raise ValueError("DATABASE_URL must be a valid PostgreSQL/Supabase connection URL (postgresql://...)")
+
+    connect_args["prepared_statement_cache_size"] = 0
+    engine_kwargs["poolclass"] = NullPool
 
 engine = create_async_engine(
     db_url,
-    echo=False,
-    future=True,
-    poolclass=NullPool,
     connect_args=connect_args,
+    **engine_kwargs,
 )
 
 async_session_maker = async_sessionmaker(

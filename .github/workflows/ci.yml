@@ -29,3 +29,5 @@ jobs:
 
       - name: Run pytest
         run: uv run pytest
+        env:
+          TESTING: "1"
