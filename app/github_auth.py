@@ -130,8 +130,15 @@ def build_review_summary_card(
     bug_count: int,
     risk_count: int,
     nit_count: int,
+    triage_summary: str | None = None,
+    secret_alerts_count: int = 0,
+    agent_statuses: dict[str, str] | None = None,
+    review_checks: dict[str, str] | None = None,
+    walkthrough: list[dict[str, str]] | None = None,
+    poem: str | None = None,
+    suggested_tests: list[dict[str, str]] | None = None,
 ) -> str:
-    """Generate Markdown summary scorecard for PR review with verdict and count table."""
+    """Generate rich CodeRabbit-grade Markdown summary card with review checks, walkthrough table, and test stubs."""
     verdict_clean = verdict.upper().strip()
     verdict_emoji = {
         "PASS": "🟢",
@@ -141,17 +148,90 @@ def build_review_summary_card(
 
     sha_short = commit_sha[:7] if commit_sha else "HEAD"
 
+    # Optional CodeRabbit Poem Banner
+    poem_section = ""
+    if poem and poem.strip():
+        poem_clean = "\n".join(f"> *{line.strip()}*" for line in poem.strip().splitlines() if line.strip())
+        poem_section = f"{poem_clean}\n\n"
+
+    triage_section = ""
+    if triage_summary:
+        triage_section = f"### 🏷️ Triage & Impact\n\n{triage_summary}\n\n"
+
+    # Review Checks Matrix Badges
+    checks_dict = review_checks or agent_statuses
+    checks_section = ""
+    if checks_dict:
+        rows = [f"| **{category}** | {status} |" for category, status in checks_dict.items()]
+        checks_section = (
+            "### 🎯 Review Checks\n\n"
+            "| Category | Status |\n"
+            "| :--- | :--- |\n"
+            + "\n".join(rows)
+            + "\n\n"
+        )
+
+
+    # File Walkthrough Table
+    walkthrough_section = ""
+    if walkthrough:
+        wt_rows = [
+            f"| `{item.get('file', '')}` | {item.get('impact', '🧹 Refactor')} | {item.get('summary', '')} |"
+            for item in walkthrough
+            if item.get("file")
+        ]
+        if wt_rows:
+            walkthrough_section = (
+                "### 🔍 Changes Walkthrough\n\n"
+                "| File | Impact | Summary |\n"
+                "| :--- | :--- | :--- |\n"
+                + "\n".join(wt_rows)
+                + "\n\n"
+            )
+
+    security_status = (
+        f"| 🚨 Secret Alerts | **{secret_alerts_count} (CRITICAL)** |\n"
+        if secret_alerts_count > 0
+        else "| 🛡️ Secret Scan | 🟢 Clean (0 exposed keys) |\n"
+    )
+
+    findings_section = (
+        f"### 📊 Findings Breakdown\n\n"
+        f"| Category | Status / Count |\n"
+        f"| :--- | :--- |\n"
+        f"{security_status}"
+        f"| 🔴 Bugs | {bug_count} |\n"
+        f"| 🟡 Risks | {risk_count} |\n"
+        f"| 🔵 Nits | {nit_count} |\n\n"
+    )
+
+    # Suggested Unit Tests Section
+    tests_section = ""
+    if suggested_tests:
+        test_blocks = []
+        for idx, st in enumerate(suggested_tests, 1):
+            target = st.get("target_file", "Test")
+            desc = st.get("description", "Suggested edge-case test")
+            code = st.get("code_snippet", "").strip()
+            test_blocks.append(f"**Test {idx} ({target})**: {desc}\n```python\n{code}\n```")
+        tests_section = (
+            "<details>\n"
+            f"<summary>🧪 <b>Suggested Unit Tests ({len(suggested_tests)})</b></summary>\n\n"
+            + "\n\n".join(test_blocks)
+            + "\n\n</details>\n"
+        )
+
     return (
         f"<!-- patchpilot-ai-review -->\n"
         f"## {verdict_emoji} PatchPilot AI PR Review\n\n"
         f"**Verdict:** `{verdict_clean}` &nbsp;|&nbsp; **Commit:** `{sha_short}`\n\n"
+        f"{poem_section}"
+        f"{triage_section}"
         f"{summary.strip()}\n\n"
-        f"### 📊 Findings Breakdown\n\n"
-        f"| Severity | Count |\n"
-        f"| :--- | :--- |\n"
-        f"| 🔴 Bugs | {bug_count} |\n"
-        f"| 🟡 Risks | {risk_count} |\n"
-        f"| 🔵 Nits | {nit_count} |\n"
+        f"{checks_section}"
+        f"{walkthrough_section}"
+        f"{findings_section}"
+        f"{tests_section}"
     )
 
 
@@ -163,11 +243,17 @@ async def publish_pr_review(
     review_data: dict[str, Any],
     valid_lines: dict[str, set[int]],
     client: httpx.AsyncClient | None = None,
+    triage_summary: str | None = None,
+    secret_alerts_count: int = 0,
 ) -> dict[str, Any]:
     """Publish native GitHub review with summary card and filtered inline comments."""
     summary = review_data.get("summary", "Review completed.")
     verdict = review_data.get("verdict", "PASS")
     findings = review_data.get("findings", [])
+    agent_statuses = review_data.get("agent_statuses")
+    walkthrough = review_data.get("walkthrough")
+    poem = review_data.get("poem")
+    suggested_tests = review_data.get("suggested_tests")
 
     bug_count = sum(1 for f in findings if str(f.get("severity", "")).lower() == "bug")
     risk_count = sum(1 for f in findings if str(f.get("severity", "")).lower() == "risk")
@@ -180,7 +266,14 @@ async def publish_pr_review(
         bug_count=bug_count,
         risk_count=risk_count,
         nit_count=nit_count,
+        triage_summary=triage_summary,
+        secret_alerts_count=secret_alerts_count,
+        agent_statuses=agent_statuses,
+        walkthrough=walkthrough,
+        poem=poem,
+        suggested_tests=suggested_tests,
     )
+
 
     comments: list[dict[str, Any]] = []
     for f in findings:
@@ -279,6 +372,45 @@ async def post_comment_reply(
 
         response.raise_for_status()
         return response.json()
+    finally:
+        if close_client:
+            await client.aclose()
+
+
+async def apply_pr_labels(
+    token: str,
+    repo_full_name: str,
+    pr_number: int,
+    labels: list[str],
+    client: httpx.AsyncClient | None = None,
+) -> list[str]:
+    """Add triage, size, and security labels to GitHub Pull Request / Issue."""
+    if not labels:
+        return []
+
+    close_client = False
+    if client is None:
+        client = httpx.AsyncClient(timeout=30.0)
+        close_client = True
+
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    url = f"https://api.github.com/repos/{repo_full_name}/issues/{pr_number}/labels"
+    try:
+        response = await client.post(url, headers=headers, json={"labels": labels})
+        if response.status_code in (200, 201):
+            data = response.json()
+            if isinstance(data, list):
+                return [l.get("name", "") for l in data if isinstance(l, dict)]
+            return labels
+        logger.warning("GitHub label API returned status %s for %s#%s", response.status_code, repo_full_name, pr_number)
+        return []
+    except Exception as exc:
+        logger.warning("Failed to apply PR labels to %s#%s: %s", repo_full_name, pr_number, exc)
+        return []
     finally:
         if close_client:
             await client.aclose()

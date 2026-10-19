@@ -272,6 +272,14 @@ def test_interactive_command_regex():
     assert m4 is not None
     assert m4.group(1).lower() == "explain"
 
+    m5 = COMMAND_RE.search("@patchpilot-app[bot] review security")
+    assert m5 is not None
+    assert "review" in m5.group(1).lower()
+
+    m6 = COMMAND_RE.search("@patchpilot-app[bot] generate tests")
+    assert m6 is not None
+    assert "tests" in m6.group(1).lower()
+
 
 # -----------------------------------------------------------------------------
 # 5. OAuth & Session Tokens Tests

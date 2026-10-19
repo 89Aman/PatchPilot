@@ -26,6 +26,7 @@ from app.config import settings
 from app.crypto import encrypt_secret
 from app.db import DEFAULT_POLICY, Base, SessionLocal, VaultConfig, engine, get_db, init_db
 from app.github_auth import (
+    apply_pr_labels,
     create_session_jwt,
     exchange_oauth_code,
     fetch_pr_diff,
@@ -46,6 +47,13 @@ from app.clerk_auth import (
     verify_clerk_token,
 )
 from app.llm import annotate_diff, run_interactive_command, run_pr_review, test_llm_connection
+from app.security import (
+    check_pr_authorization,
+    global_rate_limiter,
+    sanitize_diff_text,
+    scan_diff_for_secrets,
+)
+from app.triage import compute_pr_triage
 from app.ui import DASHBOARD_HTML
 
 TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
@@ -54,7 +62,11 @@ templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("patchpilot")
 
-COMMAND_RE = re.compile(r"(?:@patchpilot[\w-]*|@contextlens[\w-]*|/lens|/patchpilot)\s+(explain|fix)\b(.*)$", re.IGNORECASE | re.DOTALL)
+COMMAND_RE = re.compile(
+    r"(?:@patchpilot[\w-]*(?:\[bot\])?|@contextlens[\w-]*(?:\[bot\])?|/lens|/patchpilot)\s+(explain|fix|review(?:\s+(?:security|perf|bugs?))?|generate\s+tests?|test|tests)\b(.*)$",
+    re.IGNORECASE | re.DOTALL,
+)
+
 
 
 @asynccontextmanager
@@ -675,7 +687,7 @@ async def _get_owner_config(owner: str) -> VaultConfig | None:
 
 
 async def handle_pr_event(payload: dict[str, Any]) -> None:
-    """Background task to fetch PR diff, run review, and publish comments."""
+    """Background task to fetch PR diff, scan secrets, triage risk, run review, and publish comments."""
     try:
         installation_id = payload.get("installation", {}).get("id")
         repository = payload.get("repository", {})
@@ -686,8 +698,29 @@ async def handle_pr_event(payload: dict[str, Any]) -> None:
         head_sha = pr.get("head", {}).get("sha", "")
         pr_title = pr.get("title", "")
         pr_body = pr.get("body") or ""
+        additions = pr.get("additions", 0)
+        deletions = pr.get("deletions", 0)
 
         if not installation_id or not repo_full_name or not pr_number:
+            return
+
+        # 0. Wallet Shield Anti-Abuse & Rate-Limiting Protection
+        is_fork = bool(pr.get("head", {}).get("repo", {}).get("fork", False) or repository.get("fork", False))
+        is_private = bool(repository.get("private", False))
+        author_association = pr.get("author_association", "NONE")
+
+        authorized, auth_reason = check_pr_authorization(
+            author_association=author_association,
+            is_fork=is_fork,
+            is_private=is_private,
+        )
+        if not authorized:
+            logger.info("Wallet Shield blocked automatic review for %s#%s: %s", repo_full_name, pr_number, auth_reason)
+            return
+
+        allowed, rate_msg = global_rate_limiter.check_and_increment(repo_full_name, max_requests=25, window_seconds=3600)
+        if not allowed:
+            logger.warning("Rate limit reached for %s: %s", repo_full_name, rate_msg)
             return
 
         cfg = await _get_owner_config(owner)
@@ -703,9 +736,70 @@ async def handle_pr_event(payload: dict[str, Any]) -> None:
             if not annotated_diff.strip():
                 return
 
-            review_data = await run_pr_review(cfg, pr_title, pr_body, annotated_diff, client=client)
-            await publish_pr_review(token, repo_full_name, pr_number, head_sha, review_data, valid_lines, client=client)
-            logger.info("Published review for %s#%s", repo_full_name, pr_number)
+            # 1. Pre-LLM Secret Detection (PatchPilot Secure)
+            secret_findings = scan_diff_for_secrets(raw_diff)
+            secret_count = len(secret_findings)
+
+            # 2. PR Complexity & Risk Assessment (PatchPilot Triage)
+            files_list = list(valid_lines.keys())
+            triage = compute_pr_triage(
+                files_changed=files_list,
+                additions=additions,
+                deletions=deletions,
+                has_secret_findings=secret_count > 0,
+            )
+
+            # 3. Apply GitHub Triage & Security Labels asynchronously
+            await apply_pr_labels(token, repo_full_name, pr_number, triage.labels, client=client)
+
+            # 4. Sanitize diff before LLM processing if secrets were detected
+            clean_annotated_diff = sanitize_diff_text(annotated_diff, secret_findings) if secret_count > 0 else annotated_diff
+
+            # 5. Run AI PR Review with clean diff
+            review_data = await run_pr_review(
+                cfg=cfg,
+                pr_title=pr_title,
+                pr_body=pr_body,
+                annotated_diff=clean_annotated_diff,
+                client=client,
+                valid_lines=valid_lines,
+                triage=triage,
+            )
+
+
+            # If secrets were detected, inject critical inline alerts and block verdict
+            if secret_findings:
+                if "findings" not in review_data or not isinstance(review_data["findings"], list):
+                    review_data["findings"] = []
+                for sf in secret_findings:
+                    review_data["findings"].insert(0, {
+                        "file": sf.file_path,
+                        "line": sf.line_number,
+                        "severity": "bug",
+                        "title": f"🚨 Secret Leak Detected: {sf.secret_type}",
+                        "comment": (
+                            f"**CRITICAL SECURITY ALERT**: Potential exposed credential `{sf.matched_text_masked}` detected.\n\n"
+                            f"**Remediation**:\n"
+                            f"1. Immediately revoke and rotate this secret in your provider console.\n"
+                            f"2. Remove the secret from code and scrub git history using `git-filter-repo`.\n"
+                            f"3. Store credentials using environment variables or a secrets manager."
+                        ),
+                    })
+                review_data["verdict"] = "BLOCK"
+
+            # 6. Publish native GitHub review with triage summary & security badges
+            await publish_pr_review(
+                token,
+                repo_full_name,
+                pr_number,
+                head_sha,
+                review_data,
+                valid_lines,
+                client=client,
+                triage_summary=triage.summary_text,
+                secret_alerts_count=secret_count,
+            )
+            logger.info("Published review and triage for %s#%s (size: %s, risk: %s)", repo_full_name, pr_number, triage.size_tier, triage.risk_level)
     except Exception as exc:
         logger.exception("Failed processing PR review webhook: %s", exc)
 
