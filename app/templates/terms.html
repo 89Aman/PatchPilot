@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Terms of Service & Acceptable Use — PatchPilot</title>
+  <meta name="description" content="Terms of Service for PatchPilot: Open-source BYOK GitHub App and PR review engine. Clear responsibilities, 100% code ownership, and fair use guidelines." />
+  
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <link rel="alternate icon" type="image/x-icon" href="/favicon.ico" />
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+  
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;600;700;800&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet" />
+  
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            brand: {
+              400: '#fb923c',
+              500: '#f97316',
+              600: '#ea580c',
+            },
+            dark: {
+              950: '#07090e',
+              900: '#0c1017',
+              850: '#111722',
+              800: '#171f2e',
+            }
+          },
+          fontFamily: {
+            sans: ['Inter', 'sans-serif'],
+            display: ['Plus Jakarta Sans', 'sans-serif'],
+            mono: ['JetBrains Mono', 'monospace'],
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    .material-symbols-outlined {
+      font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 20;
+      font-size: 18px;
+      line-height: 1;
+      display: inline-block;
+      vertical-align: middle;
+    }
+  </style>
+</head>
+
+<body class="bg-dark-950 text-slate-100 font-sans antialiased selection:bg-brand-500 selection:text-white min-h-screen flex flex-col justify-between">
+
+  <!-- Header -->
+  <header class="sticky top-0 z-50 backdrop-blur-xl bg-dark-950/80 border-b border-white/5">
+    <div class="max-w-4xl mx-auto px-6 h-16 flex items-center justify-between">
+      <a href="/" class="flex items-center gap-2.5 group">
+        <div class="w-8 h-8 rounded-lg bg-gradient-to-tr from-brand-600 to-amber-500 flex items-center justify-center text-white shadow-md shadow-brand-500/20 group-hover:scale-105 transition-transform">
+          <span class="material-symbols-outlined text-white">flight_takeoff</span>
+        </div>
+        <div class="flex items-center gap-2">
+          <span class="font-display font-bold text-lg tracking-tight text-white">PatchPilot</span>
+          <span class="text-[11px] font-mono px-2 py-0.5 rounded-full bg-white/5 border border-white/10 text-slate-300">Legal</span>
+        </div>
+      </a>
+
+      <div class="flex items-center gap-4 text-xs font-medium text-slate-400">
+        <a href="/" class="hover:text-white transition">Home</a>
+        <a href="/docs" class="hover:text-white transition">Docs</a>
+        <a href="/privacy" class="hover:text-white transition">Privacy Policy</a>
+        <a href="/dashboard" class="px-3 py-1.5 rounded-lg bg-brand-500 hover:bg-brand-600 text-white font-semibold transition shadow-md shadow-brand-500/20">
+          Vault
+        </a>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Content -->
+  <main class="max-w-4xl mx-auto px-6 py-12 flex-1">
+    
+    <!-- Title Banner -->
+    <div class="border-b border-white/10 pb-8 mb-10">
+      <div class="inline-flex items-center gap-2 px-3 py-1 mb-4 rounded-full bg-white/5 border border-white/10 text-xs font-mono text-slate-300">
+        <span class="material-symbols-outlined text-xs text-brand-400">gavel</span>
+        <span>Open Source &bull; Apache-2.0 License Compatible</span>
+      </div>
+      <h1 class="text-3xl sm:text-4xl font-display font-bold text-white tracking-tight mb-3">
+        Terms of Service
+      </h1>
+      <p class="text-sm font-mono text-slate-400">
+        Effective Date: October 19, 2026 &bull; Version 1.0 &bull; PatchPilot Core
+      </p>
+    </div>
+
+    <!-- Content Sections -->
+    <div class="space-y-10 text-sm leading-relaxed text-slate-300">
+      
+      <!-- Section 1 -->
+      <section class="space-y-3">
+        <h2 class="text-lg font-display font-bold text-white flex items-center gap-2">
+          <span class="material-symbols-outlined text-brand-400">handshake</span>
+          <span>1. Acceptance of Terms</span>
+        </h2>
+        <p>
+          By installing the PatchPilot GitHub App, configuring credentials in the BYOK Vault, or utilizing the PatchPilot review API, you acknowledge and agree to be bound by these Terms of Service. If you are accepting on behalf of an organization or enterprise, you represent that you possess the requisite authority to bind that entity.
+        </p>
+      </section>
+
+      <!-- Section 2 -->
+      <section class="space-y-3">
+        <h2 class="text-lg font-display font-bold text-white flex items-center gap-2">
+          <span class="material-symbols-outlined text-brand-400">description</span>
+          <span>2. Service Description</span>
+        </h2>
+        <p>
+          PatchPilot is an automated pull request analysis and code review platform. When pull requests are created or updated in repositories where the GitHub App is installed, PatchPilot parses the diff and invokes your configured AI provider to post code observations, vulnerability alerts, and interactive test generation suggestions.
+        </p>
+      </section>
+
+      <!-- Section 3 -->
+      <section class="space-y-3">
+        <h2 class="text-lg font-display font-bold text-white flex items-center gap-2">
+          <span class="material-symbols-outlined text-brand-400">key</span>
+          <span>3. BYOK Responsibilities &amp; Model Costs</span>
+        </h2>
+        <p>
+          PatchPilot operates on a <strong>Bring Your Own Key (BYOK)</strong> model. You are solely responsible for:
+        </p>
+        <ul class="list-disc list-inside space-y-1.5 pl-2 text-slate-400">
+          <li>Procuring, funding, and securing your third-party API keys (e.g. Google Cloud, OpenAI, OpenRouter, Groq, xAI).</li>
+          <li>Monitoring your own API quotas, consumption tiers, and billing charges directly with your model provider. PatchPilot charges zero markup and incurs zero financial liability for your model token consumption.</li>
+          <li>Ensuring your use of the AI provider complies with that provider's commercial terms and policies.</li>
+        </ul>
+      </section>
+
+      <!-- Section 4 -->
+      <section class="space-y-3">
+        <h2 class="text-lg font-display font-bold text-white flex items-center gap-2">
+          <span class="material-symbols-outlined text-brand-400">smart_toy</span>
+          <span>4. AI Guidance &amp; Human-in-the-Loop Disclaimer</span>
+        </h2>
+        <div class="p-4 rounded-xl bg-dark-900 border border-amber-500/20 text-xs space-y-2">
+          <div class="text-amber-400 font-bold flex items-center gap-1.5">
+            <span class="material-symbols-outlined text-sm">warning</span>
+            <span>Important Verification Notice:</span>
+          </div>
+          <p class="text-slate-300">
+            Automated AI reviews, line comments, diff analyses, and suggestions produced by PatchPilot are assistive tools. They do not constitute formal code audits, guaranteed security certifications, or verified bug-free assurances. Developers and repository maintainers maintain the ultimate responsibility for testing, validating, and approving all code changes before merging to production.
+          </p>
+        </div>
+      </section>
+
+      <!-- Section 5 -->
+      <section class="space-y-3">
+        <h2 class="text-lg font-display font-bold text-white flex items-center gap-2">
+          <span class="material-symbols-outlined text-brand-400">copyright</span>
+          <span>5. Intellectual Property &amp; 100% Code Ownership</span>
+        </h2>
+        <p>
+          You retain <strong>complete, exclusive, and unencumbered ownership</strong> of all code, intellectual property, repositories, pull request content, and documentation submitted through PatchPilot. PatchPilot asserts zero ownership, copyright claims, or intellectual property rights over your software.
+        </p>
+      </section>
+
+      <!-- Section 6 -->
+      <section class="space-y-3">
+        <h2 class="text-lg font-display font-bold text-white flex items-center gap-2">
+          <span class="material-symbols-outlined text-brand-400">block</span>
+          <span>6. Acceptable Use Policy</span>
+        </h2>
+        <p>
+          You agree not to use PatchPilot to:
+        </p>
+        <ul class="list-disc list-inside space-y-1.5 pl-2 text-slate-400">
+          <li>Transmit malicious code, viruses, trojans, or illicit cyber weapons.</li>
+          <li>Attempt denial-of-service (DoS) attacks, exploit API endpoints, or flood webhook receivers.</li>
+          <li>Circumvent or tamper with cryptographic key boundaries or multi-tenant database partitions.</li>
+        </ul>
+      </section>
+
+      <!-- Section 7 -->
+      <section class="space-y-3">
+        <h2 class="text-lg font-display font-bold text-white flex items-center gap-2">
+          <span class="material-symbols-outlined text-brand-400">info</span>
+          <span>7. Disclaimer of Warranties &amp; Limitation of Liability</span>
+        </h2>
+        <p class="text-xs text-slate-400 uppercase font-mono">
+          The software is provided "as is", without warranty of any kind, express or implied, including but not limited to the warranties of merchantability, fitness for a particular purpose and noninfringement. In no event shall the authors or copyright holders be liable for any claim, damages or other liability arising from, out of or in connection with the software.
+        </p>
+      </section>
+
+      <!-- Section 8 -->
+      <section class="space-y-3">
+        <h2 class="text-lg font-display font-bold text-white flex items-center gap-2">
+          <span class="material-symbols-outlined text-brand-400">contact_support</span>
+          <span>8. Contact &amp; Termination</span>
+        </h2>
+        <p>
+          You may terminate these Terms at any time by simply uninstalling the GitHub App and purging your credentials in the BYOK vault. For questions regarding these terms, submit an inquiry at <a href="https://github.com/89Aman/PatchPilot" target="_blank" class="underline text-brand-400 hover:text-brand-300">github.com/89Aman/PatchPilot</a>.
+        </p>
+      </section>
+
+    </div>
+
+  </main>
+
+  <!-- Footer -->
+  <footer class="border-t border-white/5 py-8 text-center text-xs text-slate-500 font-mono mt-16">
+    <div class="max-w-4xl mx-auto px-6 flex flex-col sm:flex-row items-center justify-between gap-4">
+      <div>
+        <span class="font-display font-bold text-slate-300">PatchPilot</span> &bull; 
+        <span>Zero Data Leakage Sovereign AI Code Reviews</span>
+      </div>
+      <div class="flex items-center gap-4 text-slate-400">
+        <a href="/privacy" class="hover:text-white transition">Privacy Policy</a>
+        <a href="/terms" class="text-white">Terms of Service</a>
+        <a href="/docs" class="hover:text-white transition">Docs</a>
+        <a href="https://github.com/89Aman/PatchPilot" target="_blank" rel="noreferrer" class="hover:text-white transition">GitHub</a>
+      </div>
+    </div>
+  </footer>
+
+</body>
+</html>

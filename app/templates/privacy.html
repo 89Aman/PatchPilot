@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Privacy Policy & Zero-Leakage Guarantee — PatchPilot</title>
+  <meta name="description" content="PatchPilot Privacy Policy: 100% data custody, AES-256-GCM encrypted BYOK vault, zero training on your code, and ephemeral memory diff reviews." />
+  
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <link rel="alternate icon" type="image/x-icon" href="/favicon.ico" />
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+  
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;600;700;800&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet" />
+  
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            brand: {
+              400: '#fb923c',
+              500: '#f97316',
+              600: '#ea580c',
+            },
+            dark: {
+              950: '#07090e',
+              900: '#0c1017',
+              850: '#111722',
+              800: '#171f2e',
+            }
+          },
+          fontFamily: {
+            sans: ['Inter', 'sans-serif'],
+            display: ['Plus Jakarta Sans', 'sans-serif'],
+            mono: ['JetBrains Mono', 'monospace'],
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    .material-symbols-outlined {
+      font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 20;
+      font-size: 18px;
+      line-height: 1;
+      display: inline-block;
+      vertical-align: middle;
+    }
+  </style>
+</head>
+
+<body class="bg-dark-950 text-slate-100 font-sans antialiased selection:bg-brand-500 selection:text-white min-h-screen flex flex-col justify-between">
+
+  <!-- Header -->
+  <header class="sticky top-0 z-50 backdrop-blur-xl bg-dark-950/80 border-b border-white/5">
+    <div class="max-w-4xl mx-auto px-6 h-16 flex items-center justify-between">
+      <a href="/" class="flex items-center gap-2.5 group">
+        <div class="w-8 h-8 rounded-lg bg-gradient-to-tr from-brand-600 to-amber-500 flex items-center justify-center text-white shadow-md shadow-brand-500/20 group-hover:scale-105 transition-transform">
+          <span class="material-symbols-outlined text-white">flight_takeoff</span>
+        </div>
+        <div class="flex items-center gap-2">
+          <span class="font-display font-bold text-lg tracking-tight text-white">PatchPilot</span>
+          <span class="text-[11px] font-mono px-2 py-0.5 rounded-full bg-white/5 border border-white/10 text-slate-300">Legal</span>
+        </div>
+      </a>
+
+      <div class="flex items-center gap-4 text-xs font-medium text-slate-400">
+        <a href="/" class="hover:text-white transition">Home</a>
+        <a href="/docs" class="hover:text-white transition">Docs</a>
+        <a href="/terms" class="hover:text-white transition">Terms of Service</a>
+        <a href="/dashboard" class="px-3 py-1.5 rounded-lg bg-brand-500 hover:bg-brand-600 text-white font-semibold transition shadow-md shadow-brand-500/20">
+          Vault
+        </a>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Content -->
+  <main class="max-w-4xl mx-auto px-6 py-12 flex-1">
+    
+    <!-- Title Banner -->
+    <div class="border-b border-white/10 pb-8 mb-10">
+      <div class="inline-flex items-center gap-2 px-3 py-1 mb-4 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-xs font-mono text-emerald-400">
+        <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+        <span>Zero Data Training &bull; AES-256-GCM Encrypted</span>
+      </div>
+      <h1 class="text-3xl sm:text-4xl font-display font-bold text-white tracking-tight mb-3">
+        Privacy Policy &amp; Data Custody
+      </h1>
+      <p class="text-sm font-mono text-slate-400">
+        Effective Date: October 19, 2026 &bull; Version 1.0 &bull; Sovereign BYOK Architecture
+      </p>
+    </div>
+
+    <!-- Content Sections -->
+    <div class="space-y-10 text-sm leading-relaxed text-slate-300">
+      
+      <!-- Section 1 -->
+      <section class="space-y-3">
+        <h2 class="text-lg font-display font-bold text-white flex items-center gap-2">
+          <span class="material-symbols-outlined text-brand-400">shield</span>
+          <span>1. The Zero Data Leakage Guarantee</span>
+        </h2>
+        <p>
+          PatchPilot is architected from the ground up as a <strong>Bring Your Own Key (BYOK)</strong> review engine. Unlike conventional SaaS review bots:
+        </p>
+        <ul class="list-disc list-inside space-y-1.5 pl-2 text-slate-400">
+          <li><strong>We never train models on your code.</strong> Neither PatchPilot nor Noventra retains, aggregates, or trains any machine learning model on your repository code, commits, or pull requests.</li>
+          <li><strong>Ephemeral In-Memory Processing:</strong> Pull request diffs are retrieved strictly on-demand in memory, processed through your designated model endpoint, and immediately discarded upon review submission. Diffs are never written to disk or persistent databases.</li>
+          <li><strong>Air-Gapped &amp; Self-Hosted Support:</strong> For organizations with strict compliance, PatchPilot can be self-hosted via Docker or Kubernetes with a local, air-gapped Ollama instance.</li>
+        </ul>
+      </section>
+
+      <!-- Section 2 -->
+      <section class="space-y-3">
+        <h2 class="text-lg font-display font-bold text-white flex items-center gap-2">
+          <span class="material-symbols-outlined text-brand-400">lock</span>
+          <span>2. Cryptographic Security of Your API Keys</span>
+        </h2>
+        <p>
+          When you configure your provider keys (Google Gemini, OpenAI, Claude via OpenRouter, Groq, xAI Grok) in the PatchPilot BYOK Vault:
+        </p>
+        <div class="p-4 rounded-xl bg-dark-900 border border-white/10 font-mono text-xs space-y-2">
+          <div class="text-brand-400 font-bold">AES-256-GCM Encryption Specification:</div>
+          <p class="text-slate-400">
+            Every key is encrypted at rest using an authenticated 256-bit Galois/Counter Mode cipher. Each entry generates a unique cryptographically random 96-bit initialization vector (nonce) and authentication tag to guarantee confidentiality and prevent tampering.
+          </p>
+        </div>
+      </section>
+
+      <!-- Section 3 -->
+      <section class="space-y-3">
+        <h2 class="text-lg font-display font-bold text-white flex items-center gap-2">
+          <span class="material-symbols-outlined text-brand-400">database</span>
+          <span>3. Information We Collect and Process</span>
+        </h2>
+        <p>
+          We collect only the bare minimum data necessary to route webhooks and authenticate your session:
+        </p>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+          <div class="p-3.5 rounded-xl bg-dark-900 border border-white/5 space-y-1">
+            <span class="font-bold text-white block">Identity &amp; Account</span>
+            <span class="text-slate-400">GitHub username, avatar URL, and user ID for authentication session issuance.</span>
+          </div>
+          <div class="p-3.5 rounded-xl bg-dark-900 border border-white/5 space-y-1">
+            <span class="font-bold text-white block">App Installation ID</span>
+            <span class="text-slate-400">GitHub App installation IDs used strictly to route review webhooks to your vault config.</span>
+          </div>
+          <div class="p-3.5 rounded-xl bg-dark-900 border border-white/5 space-y-1">
+            <span class="font-bold text-white block">Review Guidelines</span>
+            <span class="text-slate-400">Custom policy prompt guidelines saved by you in your BYOK vault to tailor code reviews.</span>
+          </div>
+          <div class="p-3.5 rounded-xl bg-dark-900 border border-white/5 space-y-1">
+            <span class="font-bold text-white block">Encrypted API Keys</span>
+            <span class="text-slate-400">Encrypted ciphertext of your LLM provider key, stored securely in PostgreSQL/SQLite.</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- Section 4 -->
+      <section class="space-y-3">
+        <h2 class="text-lg font-display font-bold text-white flex items-center gap-2">
+          <span class="material-symbols-outlined text-brand-400">cloud_sync</span>
+          <span>4. Direct Provider Communication</span>
+        </h2>
+        <p>
+          During PR reviews, PatchPilot dispatches the code diff directly from the server to your selected provider using your encrypted credentials. Your data is subject to the data protection agreement of your chosen AI provider (e.g., Google Cloud Vertex/Gemini Enterprise API terms, OpenAI API zero-retention policy). PatchPilot never intermediates or proxies your requests through third-party telemetry aggregators.
+        </p>
+      </section>
+
+      <!-- Section 5 -->
+      <section class="space-y-3">
+        <h2 class="text-lg font-display font-bold text-white flex items-center gap-2">
+          <span class="material-symbols-outlined text-brand-400">delete_forever</span>
+          <span>5. Data Deletion and Revocation</span>
+        </h2>
+        <p>
+          You maintain unconditional control over your data:
+        </p>
+        <ul class="list-disc list-inside space-y-1 pl-2 text-slate-400">
+          <li>You can delete or overwrite your encrypted vault credentials at any time in the <strong>BYOK Vault Dashboard</strong>.</li>
+          <li>Uninstalling the GitHub App instantly terminates webhook access to all your repositories.</li>
+          <li>To request a complete database purge of all records associated with your GitHub owner name, submit an issue or contact our security desk.</li>
+        </ul>
+      </section>
+
+      <!-- Section 6 -->
+      <section class="space-y-3">
+        <h2 class="text-lg font-display font-bold text-white flex items-center gap-2">
+          <span class="material-symbols-outlined text-brand-400">mail</span>
+          <span>6. Security &amp; Contact</span>
+        </h2>
+        <p>
+          For security inquiries, vulnerability disclosures, or questions regarding this Privacy Policy, reach out to:
+        </p>
+        <div class="p-3.5 rounded-xl bg-dark-900 border border-white/5 font-mono text-xs text-brand-400">
+          GitHub: <a href="https://github.com/89Aman/PatchPilot/issues" target="_blank" class="underline text-slate-300 hover:text-white">github.com/89Aman/PatchPilot</a><br />
+          Organization: Noventra Open Source &bull; patchpilot.noventra.org.in
+        </div>
+      </section>
+
+    </div>
+
+  </main>
+
+  <!-- Footer -->
+  <footer class="border-t border-white/5 py-8 text-center text-xs text-slate-500 font-mono mt-16">
+    <div class="max-w-4xl mx-auto px-6 flex flex-col sm:flex-row items-center justify-between gap-4">
+      <div>
+        <span class="font-display font-bold text-slate-300">PatchPilot</span> &bull; 
+        <span>Zero Data Leakage Sovereign AI Code Reviews</span>
+      </div>
+      <div class="flex items-center gap-4 text-slate-400">
+        <a href="/privacy" class="text-white">Privacy Policy</a>
+        <a href="/terms" class="hover:text-white transition">Terms of Service</a>
+        <a href="/docs" class="hover:text-white transition">Docs</a>
+        <a href="https://github.com/89Aman/PatchPilot" target="_blank" rel="noreferrer" class="hover:text-white transition">GitHub</a>
+      </div>
+    </div>
+  </footer>
+
+</body>
+</html>

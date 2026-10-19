@@ -172,6 +172,21 @@ async def docs_page(request: Request):
     return templates.TemplateResponse(request=request, name="docs.html")
 
 
+@app.get("/privacy", response_class=HTMLResponse, tags=["Legal"])
+@app.get("/privacy-policy", response_class=HTMLResponse, tags=["Legal"])
+async def privacy_page(request: Request):
+    """Render Privacy Policy and Zero-Leakage Guarantee page."""
+    return templates.TemplateResponse(request=request, name="privacy.html")
+
+
+@app.get("/terms", response_class=HTMLResponse, tags=["Legal"])
+@app.get("/terms-of-service", response_class=HTMLResponse, tags=["Legal"])
+@app.get("/tos", response_class=HTMLResponse, tags=["Legal"])
+async def terms_page(request: Request):
+    """Render Terms of Service and Acceptable Use page."""
+    return templates.TemplateResponse(request=request, name="terms.html")
+
+
 @app.get("/health", tags=["System"])
 async def health_check():
     """Health check endpoint."""

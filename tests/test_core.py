@@ -566,4 +566,28 @@ async def test_clerk_then_github_connect_flow(monkeypatch):
         assert res_repos_after.json()["repos"][0]["full_name"] == "octocat-dev/super-repo"
 
 
+@pytest.mark.asyncio
+async def test_legal_routes():
+    """Verify that Privacy Policy and Terms of Service endpoints render successfully."""
+    from app.main import app
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        # Privacy routes
+        res_privacy = await client.get("/privacy")
+        assert res_privacy.status_code == 200
+        assert "Privacy Policy" in res_privacy.text
+        assert "Zero Data Leakage" in res_privacy.text
+
+        res_privacy_alias = await client.get("/privacy-policy")
+        assert res_privacy_alias.status_code == 200
+
+        # Terms routes
+        res_terms = await client.get("/terms")
+        assert res_terms.status_code == 200
+        assert "Terms of Service" in res_terms.text
+        assert "Bring Your Own Key" in res_terms.text
+
+        res_terms_alias = await client.get("/terms-of-service")
+        assert res_terms_alias.status_code == 200
+
+
 

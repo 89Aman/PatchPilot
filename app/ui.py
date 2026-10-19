@@ -450,7 +450,21 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
   </main>
 
-  <!-- Script Logic -->
+  <!-- Footer -->
+  <footer class="border-t border-white/5 py-6 text-center text-xs text-slate-500 font-mono mt-auto">
+    <div class="max-w-6xl mx-auto px-6 flex flex-col sm:flex-row items-center justify-between gap-4">
+      <div>
+        <span class="font-display font-bold text-slate-300">PatchPilot</span> &bull; 
+        <span>Sovereign BYOK Code Review Vault</span>
+      </div>
+      <div class="flex items-center gap-4 text-slate-400">
+        <a href="/privacy" class="hover:text-white transition">Privacy Policy</a>
+        <a href="/terms" class="hover:text-white transition">Terms of Service</a>
+        <a href="/docs" class="hover:text-white transition">Docs</a>
+        <a href="https://github.com/89Aman/PatchPilot" target="_blank" rel="noreferrer" class="hover:text-white transition">GitHub</a>
+      </div>
+    </div>
+  </footer>
   <script>
     const PRESET_MODELS = {
       gemini: ["gemini-2.5-pro", "gemini-2.5-flash"],
