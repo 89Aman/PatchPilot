@@ -141,9 +141,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           <span class="material-symbols-outlined text-sm">lock</span>
           <span>Sign In</span>
         </button>
-        <a href="/auth/login" class="px-3.5 py-2 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-slate-300 hover:text-white font-display text-xs font-medium transition flex items-center gap-1.5 active:scale-95">
-          <span class="material-symbols-outlined text-sm">login</span>
-          <span>GitHub OAuth</span>
+        <a href="https://github.com/apps/patchpilot-app/installations/new" target="_blank" rel="noopener noreferrer" class="px-3.5 py-2 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-slate-300 hover:text-white font-display text-xs font-medium transition flex items-center gap-1.5 active:scale-95">
+          <span class="material-symbols-outlined text-sm text-brand-400">add_moderator</span>
+          <span>Install App &amp; Scope Repos</span>
         </a>
       </div>
     </div>
@@ -792,8 +792,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         if (!repos.length) {
           pillContainer.innerHTML = `
             <span class="text-slate-400 text-[11px] font-mono">0 repositories scoped</span>
-            <a href="https://github.com/settings/installations" target="_blank" rel="noopener noreferrer" class="px-2 py-0.5 rounded bg-brand-500/20 text-brand-300 border border-brand-500/30 text-[10px] font-mono transition hover:bg-brand-500/30">
-              + Install on Repos
+            <a href="https://github.com/apps/patchpilot-app/installations/new" target="_blank" rel="noopener noreferrer" class="px-2.5 py-1 rounded-lg bg-brand-500 hover:bg-brand-600 text-white text-[11px] font-semibold transition shadow-md shadow-brand-500/20 flex items-center gap-1">
+              <span class="material-symbols-outlined text-xs">add_moderator</span>
+              <span>Install &amp; Scope Repos</span>
             </a>
           `;
           return;
@@ -806,7 +807,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         }).join("") + (repos.length > 3 ? `<span class="text-slate-500 text-[10px] font-mono">+${repos.length - 3} more</span>` : '') + `
           <a href="https://github.com/settings/installations" target="_blank" rel="noopener noreferrer" class="ml-1 text-[10px] text-brand-400 hover:text-brand-300 font-mono transition flex items-center gap-0.5" title="Manage repository scope">
             <span class="material-symbols-outlined text-xs">tune</span>
-            <span>Scope</span>
+            <span>Configure Scope</span>
+          </a>
+          <a href="https://github.com/apps/patchpilot-app/installations/new" target="_blank" rel="noopener noreferrer" class="ml-1 text-[10px] text-brand-400 hover:text-brand-300 font-mono transition flex items-center gap-0.5" title="Install on more repositories">
+            <span class="material-symbols-outlined text-xs">add</span>
+            <span>Add Repos</span>
           </a>
         `;
       } catch (err) {
