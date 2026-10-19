@@ -47,7 +47,12 @@ from app.clerk_auth import (
     verify_clerk_token,
 )
 from app.llm import annotate_diff, run_interactive_command, run_pr_review, test_llm_connection
-from app.security import sanitize_diff_text, scan_diff_for_secrets
+from app.security import (
+    check_pr_authorization,
+    global_rate_limiter,
+    sanitize_diff_text,
+    scan_diff_for_secrets,
+)
 from app.triage import compute_pr_triage
 from app.ui import DASHBOARD_HTML
 
@@ -57,7 +62,11 @@ templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("patchpilot")
 
-COMMAND_RE = re.compile(r"(?:@patchpilot[\w-]*|@contextlens[\w-]*|/lens|/patchpilot)\s+(explain|fix)\b(.*)$", re.IGNORECASE | re.DOTALL)
+COMMAND_RE = re.compile(
+    r"(?:@patchpilot[\w-]*|@contextlens[\w-]*|/lens|/patchpilot)\s+(explain|fix|review(?:\s+(?:security|perf|bugs?))?|generate\s+tests?|test|tests)\b(.*)$",
+    re.IGNORECASE | re.DOTALL,
+)
+
 
 
 @asynccontextmanager
@@ -695,6 +704,25 @@ async def handle_pr_event(payload: dict[str, Any]) -> None:
         if not installation_id or not repo_full_name or not pr_number:
             return
 
+        # 0. Wallet Shield Anti-Abuse & Rate-Limiting Protection
+        is_fork = bool(pr.get("head", {}).get("repo", {}).get("fork", False) or repository.get("fork", False))
+        is_private = bool(repository.get("private", False))
+        author_association = pr.get("author_association", "NONE")
+
+        authorized, auth_reason = check_pr_authorization(
+            author_association=author_association,
+            is_fork=is_fork,
+            is_private=is_private,
+        )
+        if not authorized:
+            logger.info("Wallet Shield blocked automatic review for %s#%s: %s", repo_full_name, pr_number, auth_reason)
+            return
+
+        allowed, rate_msg = global_rate_limiter.check_and_increment(repo_full_name, max_requests=25, window_seconds=3600)
+        if not allowed:
+            logger.warning("Rate limit reached for %s: %s", repo_full_name, rate_msg)
+            return
+
         cfg = await _get_owner_config(owner)
         if not cfg:
             logger.warning("No vault configuration found for %s. Skipping review.", owner)
@@ -727,8 +755,17 @@ async def handle_pr_event(payload: dict[str, Any]) -> None:
             # 4. Sanitize diff before LLM processing if secrets were detected
             clean_annotated_diff = sanitize_diff_text(annotated_diff, secret_findings) if secret_count > 0 else annotated_diff
 
-            # 5. Run LLM review with clean diff
-            review_data = await run_pr_review(cfg, pr_title, pr_body, clean_annotated_diff, client=client)
+            # 5. Run Specialist Multi-Agent Review with clean diff
+            review_data = await run_pr_review(
+                cfg=cfg,
+                pr_title=pr_title,
+                pr_body=pr_body,
+                annotated_diff=clean_annotated_diff,
+                client=client,
+                valid_lines=valid_lines,
+                triage=triage,
+            )
+
 
             # If secrets were detected, inject critical inline alerts and block verdict
             if secret_findings:

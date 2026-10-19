@@ -104,3 +104,86 @@ def sanitize_diff_text(diff_text: str, findings: list[SecretFinding]) -> str:
         for _, pattern in SECRET_PATTERNS:
             sanitized = pattern.sub(f"[REDACTED_{f.secret_type.upper().replace(' ', '_')}]", sanitized)
     return sanitized
+
+
+# -----------------------------------------------------------------------------
+# PatchPilot Wallet Shield & Anti-Abuse Controls
+# -----------------------------------------------------------------------------
+
+MAX_DIFF_CHARS = 80_000
+TRUSTED_AUTHOR_ASSOCIATIONS = {"OWNER", "MEMBER", "COLLABORATOR"}
+
+
+def check_pr_authorization(
+    author_association: str | None,
+    is_fork: bool,
+    is_private: bool = False,
+    allow_forks: bool = False,
+) -> tuple[bool, str]:
+    """Verify if a PR is authorized for automatic LLM review to protect user API token balances."""
+    # Private repositories are internal and safe
+    if is_private:
+        return True, "Authorized (Private Repository)"
+
+    # If repo explicitly enables external forks
+    if allow_forks:
+        return True, "Authorized (allow_forks enabled)"
+
+    assoc_clean = (author_association or "NONE").upper().strip()
+    if assoc_clean in TRUSTED_AUTHOR_ASSOCIATIONS:
+        return True, f"Authorized (Trusted Association: {assoc_clean})"
+
+    # External contributor on public repository / fork
+    if is_fork:
+        return (
+            False,
+            "Wallet Shield blocked automatic review: PR from external fork on public repository. "
+            "A maintainer must trigger review manually via `@patchpilot review` to protect API credit.",
+        )
+
+    return (
+        False,
+        f"Wallet Shield blocked automatic review: Author association '{assoc_clean}' is not trusted for automatic reviews on public repository. "
+        "Maintainer review command required.",
+    )
+
+
+class RateLimiter:
+    """Simple in-memory rolling-window rate limiter for webhook PR review requests."""
+
+    def __init__(self) -> None:
+        import time
+        from collections import defaultdict
+
+        self._time = time
+        self._history: dict[str, list[float]] = defaultdict(list)
+
+    def check_and_increment(
+        self,
+        key: str,
+        max_requests: int = 20,
+        window_seconds: int = 3600,
+    ) -> tuple[bool, str]:
+        """Check if request count for key within window is below threshold and record event."""
+        now = self._time.time()
+        cutoff = now - window_seconds
+        records = [ts for ts in self._history[key] if ts > cutoff]
+
+        if len(records) >= max_requests:
+            self._history[key] = records
+            return False, f"Rate limit reached ({len(records)}/{max_requests} reviews per {window_seconds // 60}m). Skipping to conserve token budget."
+
+        records.append(now)
+        self._history[key] = records
+        return True, "OK"
+
+    def reset(self, key: str | None = None) -> None:
+        """Reset rate limiter records."""
+        if key:
+            self._history.pop(key, None)
+        else:
+            self._history.clear()
+
+
+global_rate_limiter = RateLimiter()
+

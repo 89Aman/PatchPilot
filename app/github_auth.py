@@ -132,8 +132,12 @@ def build_review_summary_card(
     nit_count: int,
     triage_summary: str | None = None,
     secret_alerts_count: int = 0,
+    agent_statuses: dict[str, str] | None = None,
+    walkthrough: list[dict[str, str]] | None = None,
+    poem: str | None = None,
+    suggested_tests: list[dict[str, str]] | None = None,
 ) -> str:
-    """Generate Markdown summary scorecard for PR review with verdict, triage stats, and findings breakdown."""
+    """Generate rich CodeRabbit-grade Markdown summary card with squad badges, walkthrough table, and test stubs."""
     verdict_clean = verdict.upper().strip()
     verdict_emoji = {
         "PASS": "🟢",
@@ -143,9 +147,44 @@ def build_review_summary_card(
 
     sha_short = commit_sha[:7] if commit_sha else "HEAD"
 
+    # Optional CodeRabbit Poem Banner
+    poem_section = ""
+    if poem and poem.strip():
+        poem_clean = "\n".join(f"> *{line.strip()}*" for line in poem.strip().splitlines() if line.strip())
+        poem_section = f"{poem_clean}\n\n"
+
     triage_section = ""
     if triage_summary:
         triage_section = f"### 🏷️ Triage & Impact\n\n{triage_summary}\n\n"
+
+    # Specialist Squad Matrix Badges
+    squad_section = ""
+    if agent_statuses:
+        rows = [f"| **{agent}** | {status} |" for agent, status in agent_statuses.items()]
+        squad_section = (
+            "### 🤖 Specialist Agent Squad\n\n"
+            "| Specialist Role | Status |\n"
+            "| :--- | :--- |\n"
+            + "\n".join(rows)
+            + "\n\n"
+        )
+
+    # File Walkthrough Table
+    walkthrough_section = ""
+    if walkthrough:
+        wt_rows = [
+            f"| `{item.get('file', '')}` | {item.get('impact', '🧹 Refactor')} | {item.get('summary', '')} |"
+            for item in walkthrough
+            if item.get("file")
+        ]
+        if wt_rows:
+            walkthrough_section = (
+                "### 🔍 Changes Walkthrough\n\n"
+                "| File | Impact | Summary |\n"
+                "| :--- | :--- | :--- |\n"
+                + "\n".join(wt_rows)
+                + "\n\n"
+            )
 
     security_status = (
         f"| 🚨 Secret Alerts | **{secret_alerts_count} (CRITICAL)** |\n"
@@ -153,19 +192,43 @@ def build_review_summary_card(
         else "| 🛡️ Secret Scan | 🟢 Clean (0 exposed keys) |\n"
     )
 
-    return (
-        f"<!-- patchpilot-ai-review -->\n"
-        f"## {verdict_emoji} PatchPilot AI PR Review\n\n"
-        f"**Verdict:** `{verdict_clean}` &nbsp;|&nbsp; **Commit:** `{sha_short}`\n\n"
-        f"{triage_section}"
-        f"{summary.strip()}\n\n"
+    findings_section = (
         f"### 📊 Findings Breakdown\n\n"
         f"| Category | Status / Count |\n"
         f"| :--- | :--- |\n"
         f"{security_status}"
         f"| 🔴 Bugs | {bug_count} |\n"
         f"| 🟡 Risks | {risk_count} |\n"
-        f"| 🔵 Nits | {nit_count} |\n"
+        f"| 🔵 Nits | {nit_count} |\n\n"
+    )
+
+    # Suggested Unit Tests Section
+    tests_section = ""
+    if suggested_tests:
+        test_blocks = []
+        for idx, st in enumerate(suggested_tests, 1):
+            target = st.get("target_file", "Test")
+            desc = st.get("description", "Suggested edge-case test")
+            code = st.get("code_snippet", "").strip()
+            test_blocks.append(f"**Test {idx} ({target})**: {desc}\n```python\n{code}\n```")
+        tests_section = (
+            "<details>\n"
+            f"<summary>🧪 <b>Suggested Unit Tests ({len(suggested_tests)})</b></summary>\n\n"
+            + "\n\n".join(test_blocks)
+            + "\n\n</details>\n"
+        )
+
+    return (
+        f"<!-- patchpilot-ai-review -->\n"
+        f"## {verdict_emoji} PatchPilot AI PR Review\n\n"
+        f"**Verdict:** `{verdict_clean}` &nbsp;|&nbsp; **Commit:** `{sha_short}`\n\n"
+        f"{poem_section}"
+        f"{triage_section}"
+        f"{summary.strip()}\n\n"
+        f"{squad_section}"
+        f"{walkthrough_section}"
+        f"{findings_section}"
+        f"{tests_section}"
     )
 
 
@@ -184,6 +247,10 @@ async def publish_pr_review(
     summary = review_data.get("summary", "Review completed.")
     verdict = review_data.get("verdict", "PASS")
     findings = review_data.get("findings", [])
+    agent_statuses = review_data.get("agent_statuses")
+    walkthrough = review_data.get("walkthrough")
+    poem = review_data.get("poem")
+    suggested_tests = review_data.get("suggested_tests")
 
     bug_count = sum(1 for f in findings if str(f.get("severity", "")).lower() == "bug")
     risk_count = sum(1 for f in findings if str(f.get("severity", "")).lower() == "risk")
@@ -198,7 +265,12 @@ async def publish_pr_review(
         nit_count=nit_count,
         triage_summary=triage_summary,
         secret_alerts_count=secret_alerts_count,
+        agent_statuses=agent_statuses,
+        walkthrough=walkthrough,
+        poem=poem,
+        suggested_tests=suggested_tests,
     )
+
 
     comments: list[dict[str, Any]] = []
     for f in findings:

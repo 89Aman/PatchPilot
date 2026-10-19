@@ -196,8 +196,24 @@ async def run_pr_review(
     pr_body: str,
     annotated_diff: str,
     client: httpx.AsyncClient | None = None,
+    valid_lines: dict[str, set[int]] | None = None,
+    triage: Any | None = None,
+    use_agent_team: bool = True,
 ) -> dict[str, Any]:
-    """Execute AI review of pull request and return structured findings."""
+    """Execute AI review of pull request using specialized multi-agent squad or single prompt fallback."""
+    if use_agent_team and valid_lines is not None:
+        from app.agents import global_agent_team
+        return await global_agent_team.run_review(
+            cfg=cfg,
+            pr_title=pr_title,
+            pr_body=pr_body,
+            annotated_diff=annotated_diff,
+            valid_lines=valid_lines,
+            triage=triage,
+            client=client,
+        )
+
+    # Legacy single-prompt fallback
     url, headers = _resolve_endpoint_and_headers(cfg)
 
     policy_section = cfg.review_policy or ""
@@ -264,22 +280,36 @@ async def run_interactive_command(
     pr_diff: str,
     client: httpx.AsyncClient | None = None,
 ) -> str:
-    """Execute interactive @patchpilot explain or @patchpilot fix command."""
+    """Execute interactive @patchpilot explain, fix, review (security/perf), or generate tests command."""
     url, headers = _resolve_endpoint_and_headers(cfg)
+    cmd_lower = command.lower().strip()
 
-    mode_instruction = (
-        "Explain the code, root cause, and architectural trade-offs concisely."
-        if command == "explain"
-        else "Provide the exact fix with clear markdown code blocks."
-    )
+    if "explain" in cmd_lower:
+        mode_instruction = "Explain the code, root cause, and architectural trade-offs concisely."
+        agent_role = "Senior Architect & Code Explainer"
+    elif "fix" in cmd_lower:
+        mode_instruction = "Provide the exact fix with clear markdown code blocks and git suggestion syntax if applicable."
+        agent_role = "Bug Hunter & Code Fixer"
+    elif "security" in cmd_lower:
+        mode_instruction = "Perform an in-depth security and vulnerability audit (OWASP, injections, auth bypass, data leaks)."
+        agent_role = "Senior Application Security Specialist"
+    elif "perf" in cmd_lower:
+        mode_instruction = "Analyze algorithmic complexity, database query patterns (N+1), memory bloat, and I/O efficiency."
+        agent_role = "Staff Performance Engineer"
+    elif any(k in cmd_lower for k in ["test", "tests"]):
+        mode_instruction = "Generate concrete, runnable unit test functions covering untested branches and edge cases."
+        agent_role = "Senior QA Automation Engineer"
+    else:
+        mode_instruction = "Review the requested code changes constructively and objectively."
+        agent_role = "Specialist AI Reviewer"
 
     system_prompt = (
         f"{cfg.review_policy or ''}\n\n"
-        f"You are replying to an interactive `@patchpilot {command}` command on a GitHub Pull Request.\n"
+        f"You are the PatchPilot {agent_role} replying to an interactive `@patchpilot {command}` command on GitHub.\n"
         f"{mode_instruction}"
     )
 
-    context_parts = [f"User Request: {user_comment}"]
+    context_parts = [f"User Directive: {user_comment}"]
     if file_path:
         context_parts.append(f"Target File: `{file_path}`")
     if diff_hunk:
