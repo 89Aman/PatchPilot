@@ -95,7 +95,8 @@
         <input
           id="apiKey"
           type="password"
-          placeholder="Leave blank to retain existing key"
+          placeholder="Paste API key (e.g. gsk_... or AIza...)"
+          onfocus="if (this.value === this.dataset.savedMasked) this.select()"
           class="w-full bg-slate-950 border border-slate-700/80 rounded-xl px-3.5 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 transition font-mono"
         />
         <p class="text-[11px] text-slate-400 mt-1">Never shown in plaintext. Stored encrypted with unique nonce.</p>
@@ -253,7 +254,16 @@
       document.getElementById("model").value = data.model || "gemini-2.5-pro";
       document.getElementById("baseUrl").value = data.base_url || "";
       document.getElementById("reviewPolicy").value = data.review_policy || POLICY_PRESETS.standard;
-      document.getElementById("keyHint").textContent = data.has_api_key ? "(Key saved in vault)" : "(No key saved yet)";
+      const keyInput = document.getElementById("apiKey");
+      if (data.has_api_key && data.masked_api_key) {
+        keyInput.value = data.masked_api_key;
+        keyInput.dataset.savedMasked = data.masked_api_key;
+        document.getElementById("keyHint").textContent = "(Key saved in vault)";
+      } else {
+        keyInput.value = "";
+        delete keyInput.dataset.savedMasked;
+        document.getElementById("keyHint").textContent = "(No key saved yet)";
+      }
       showAlert(`Loaded saved vault config for owner '${data.owner}'.`);
     } catch (err) {
       showAlert(`Network error: ${err}`, true);
@@ -274,10 +284,14 @@
     localStorage.setItem("cl_admin_token", token);
     localStorage.setItem("cl_owner", owner);
 
+    const keyInput = document.getElementById("apiKey");
+    const currentKey = keyInput.value.trim();
+    const apiKeyToSend = (currentKey === keyInput.dataset.savedMasked) ? "" : currentKey;
+
     const payload = {
       provider: document.getElementById("provider").value,
       model: document.getElementById("model").value.trim(),
-      api_key: document.getElementById("apiKey").value.trim(),
+      api_key: apiKeyToSend,
       base_url: document.getElementById("baseUrl").value.trim() || null,
       review_policy: document.getElementById("reviewPolicy").value
     };
@@ -297,7 +311,10 @@
         return;
       }
       const data = await res.json();
-      document.getElementById("apiKey").value = "";
+      if (data.masked_api_key) {
+        keyInput.value = data.masked_api_key;
+        keyInput.dataset.savedMasked = data.masked_api_key;
+      }
       document.getElementById("keyHint").textContent = "(Key saved in vault)";
       showAlert(`Success! Credentials for '${data.owner}' were encrypted with AES-256-GCM and saved to database.`);
     } catch (err) {
