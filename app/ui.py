@@ -137,7 +137,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         </div>
       </div>
       <div class="flex items-center gap-2.5">
-        <button type="button" onclick="handleClerkAuth()" class="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-display text-xs font-semibold shadow-md shadow-indigo-600/25 transition flex items-center gap-1.5 active:scale-95">
+        <button type="button" onclick="handleClerkAuth()" class="px-4 py-2 rounded-xl bg-brand-500 hover:bg-brand-600 text-white font-display text-xs font-semibold shadow-md shadow-brand-500/25 transition flex items-center gap-1.5 active:scale-95">
           <span class="material-symbols-outlined text-sm">lock</span>
           <span>Sign In</span>
         </button>
@@ -153,7 +153,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       <div class="bg-dark-900 border border-white/10 rounded-2xl p-6 max-w-md w-full shadow-2xl space-y-4">
         <div class="flex items-center justify-between border-b border-white/5 pb-3">
           <div class="flex items-center gap-2">
-            <span class="material-symbols-outlined text-indigo-400">lock</span>
+            <span class="material-symbols-outlined text-brand-400">lock</span>
             <h3 class="text-sm font-display font-bold text-white">Sign In to PatchPilot</h3>
           </div>
           <button onclick="document.getElementById('clerkModal').classList.add('hidden')" class="text-slate-500 hover:text-white text-lg leading-none">&times;</button>
@@ -663,7 +663,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
             const isClerk = data.provider === "clerk";
             authBadge.textContent = isClerk ? "SSO Verified" : "OAuth Verified";
             authBadge.className = isClerk
-              ? "text-[10px] font-mono px-2 py-0.5 rounded bg-indigo-500/10 text-indigo-400 border border-indigo-500/20"
+              ? "text-[10px] font-mono px-2 py-0.5 rounded bg-brand-500/10 text-brand-400 border border-brand-500/20"
               : "text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20";
           }
           if (authBlock) {
@@ -682,7 +682,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           document.getElementById("loginCallout").classList.remove("hidden");
           if (authBlock) {
             authBlock.innerHTML = `
-              <button onclick="handleClerkAuth()" class="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs transition flex items-center gap-1.5 shadow-md shadow-indigo-600/20 active:scale-95">
+              <button onclick="handleClerkAuth()" class="px-3 py-1.5 rounded-lg bg-brand-500 hover:bg-brand-600 text-white font-semibold text-xs transition flex items-center gap-1.5 shadow-md shadow-brand-500/20 active:scale-95">
                 <span class="material-symbols-outlined text-xs">lock</span>
                 <span>Sign In</span>
               </button>

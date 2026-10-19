@@ -150,9 +150,9 @@
           <span>GitHub</span>
         </a>
 
-        <!-- Unauthorized: Sign In with Clerk -->
+        <!-- Unauthorized: Sign In -->
         <button id="navClerkBtn" type="button" onclick="handleClerkAuth()"
-          class="inline-flex items-center gap-2 px-4 py-2 rounded-2xl bg-indigo-600 hover:bg-indigo-500 text-white font-display text-xs font-semibold shadow-lg shadow-indigo-600/30 hover:shadow-indigo-600/40 transition-all duration-200 active:scale-95">
+          class="inline-flex items-center gap-2 px-4 py-2 rounded-2xl bg-brand-500 hover:bg-brand-600 text-white font-display text-xs font-semibold shadow-lg shadow-brand-500/25 hover:shadow-brand-500/35 transition-all duration-200 active:scale-95">
           <svg class="w-4 h-4 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"
             stroke-linecap="round" stroke-linejoin="round">
             <rect x="3.5" y="10.5" width="17" height="11" rx="3" ry="3"></rect>
@@ -202,16 +202,11 @@
         </p>
 
         <!-- Primary Buttons -->
-        <div class="flex flex-col sm:flex-row items-center justify-center gap-4 mb-14">
+        <div class="flex items-center justify-center gap-4 mb-14">
           <a href="/dashboard"
             class="w-full sm:w-auto px-7 py-3.5 rounded-xl bg-brand-500 hover:bg-brand-600 text-white font-display font-semibold text-sm shadow-xl shadow-brand-500/25 transition active:scale-95 flex items-center justify-center gap-2">
             <span class="material-symbols-outlined">key</span>
             <span>Configure Your BYOK Vault</span>
-          </a>
-          <a id="heroLoginBtn" href="/auth/login"
-            class="w-full sm:w-auto px-6 py-3.5 rounded-xl border border-white/15 bg-white/5 hover:bg-white/10 text-white font-display font-semibold text-sm transition active:scale-95 flex items-center justify-center gap-2">
-            <span class="material-symbols-outlined">login</span>
-            <span>Sign In with GitHub</span>
           </a>
         </div>
 
