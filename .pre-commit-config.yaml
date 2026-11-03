@@ -1,0 +1,39 @@
+# =============================================================================
+# PatchPilot — Pre-Commit Hook Configuration (Gitleaks + Code Hygiene)
+# =============================================================================
+# Install hooks locally:
+#   pip install pre-commit && pre-commit install
+#
+# Run against all files manually:
+#   pre-commit run --all-files
+#
+# Scan full existing git history for committed secrets:
+#   gitleaks detect --source . --verbose --log-opts="--all"
+#   # Or via Docker without installing Gitleaks locally:
+#   docker run --rm -v "${PWD}:/path" zricethezav/gitleaks:latest detect --source="/path" --verbose --log-opts="--all"
+# =============================================================================
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: check-added-large-files
+        args: ["--maxkb=1500"]
+      - id: check-merge-conflict
+      - id: check-yaml
+      - id: check-toml
+      - id: detect-private-key
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.24.0
+    hooks:
+      - id: gitleaks
+        name: Gitleaks Secret Scanner (Pre-Commit)
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.9.9
+    hooks:
+      - id: ruff
+        args: [--fix, --exit-non-zero-on-fix]

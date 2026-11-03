@@ -1,0 +1,63 @@
+name: Bug Report
+description: Report a reproducible bug in PatchPilot's webhook engine, vault, or PR review output
+title: "[Bug]: "
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug in **PatchPilot**! Please fill out the sections below. **Never paste real API keys, private keys, or unmasked secrets.**
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Bug Description
+      description: A clear and concise summary of what went wrong versus what you expected to happen.
+      placeholder: "When a PR contains a renamed binary file, the webhook handler returns HTTP 500..."
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating System / Deployment Environment
+      options:
+        - Ubuntu / Debian Linux
+        - macOS
+        - Windows (WSL2 / Native)
+        - Docker Compose (Local / Self-Hosted)
+        - Google Cloud Run / Container PaaS
+        - GitHub Codespaces
+    validations:
+      required: true
+
+  - type: input
+    id: runtime
+    attributes:
+      label: Python Version & LLM Provider
+      description: Specify your Python version (`python --version`) and the configured AI provider/model.
+      placeholder: "Python 3.12.7 | Provider: groq (llama-3.3-70b-versatile)"
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal Reproduction Steps
+      description: Exact steps to reproduce the issue.
+      placeholder: |
+        1. Configure primary provider as `gemini` with model `gemini-2.5-flash`
+        2. Open a PR modifying `app/main.py`
+        3. Trigger `@patchpilot explain` in a review comment
+        4. Observe error in server logs
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant Error Logs / Stack Trace
+      description: Paste sanitized server or container logs here.
+      render: shell
+    validations:
+      required: false

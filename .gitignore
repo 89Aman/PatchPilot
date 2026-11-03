@@ -1,19 +1,148 @@
+# =============================================================================
+# PatchPilot — Git Ignore Rules (Secrets, Private Files & Build Artifacts)
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# 1. Environment Variables & Secret Stores (NEVER push to GitHub)
+# -----------------------------------------------------------------------------
+.env
+.env.*
+*.env
+!.env.example
+.secrets
+.secrets.*
+*.secret
+*.secrets
+secrets/
+private/
+secrets.json
+secrets.yaml
+secrets.yml
+secrets.toml
+.gitleaks.toml.local
+
+# -----------------------------------------------------------------------------
+# 2. Cryptographic Keys, Certificates & Cloud Provider Credentials
+# -----------------------------------------------------------------------------
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.cer
+*.csr
+*.der
+*.jks
+*.keystore
+*.ppk
+*.asc
+*.gpg
+id_rsa*
+id_dsa*
+id_ecdsa*
+id_ed25519*
+*private-key*
+*private_key*
+*credentials*.json
+*service-account*.json
+*service_account*.json
+client_secret*.json
+gcloud-key*.json
+.gcloud/
+.aws/
+.azure/
+
+# -----------------------------------------------------------------------------
+# 3. Internal AI Agent Configs, Prompts & Founder Launch Playbooks (Local-Only)
+# -----------------------------------------------------------------------------
+.agents/
+.agent/
+AGENTS.md
+CLAUDE.md
+GEMINI.md
+.cursor/
+.cursorrules
+.windsurfrules
+.github/copilot-instructions.md
+*prompt*.md
+ready_to_ship_prompt.md
+skills-lock.json
+docs/show-hn-launch.md
+docs/discussions-welcome.md
+docs/release-metadata.md
+.github/good-first-issues.md
+patchpilot-brand/social-preview-spec.md
+topics.txt
+
+# -----------------------------------------------------------------------------
+# 4. Local Databases, Supabase State, Logs & Ephemeral Dumps
+# -----------------------------------------------------------------------------
+*.db
+*.sqlite
+*.sqlite3
+*.db-journal
+*.db-shm
+*.db-wal
+*.sql.gz
+*.dump
+dump.rdb
+supabase/.temp/
+supabase/.branches/
+*.log
+logs/
+brag-output/
+
+# -----------------------------------------------------------------------------
+# 5. Python Bytecode & Virtual Environments
+# -----------------------------------------------------------------------------
 __pycache__/
-*.pyc
-*.pyo
-*.pyd
+*.py[cod]
+*$py.class
+*.so
 .Python
 env/
 venv/
 .venv/
-.env
-.pytest_cache/
-*.egg-info/
-dist/
+ENV/
+
+# -----------------------------------------------------------------------------
+# 6. Packaging & Distribution Artifacts
+# -----------------------------------------------------------------------------
 build/
-brag-output/
-*.db
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# -----------------------------------------------------------------------------
+# 7. Testing, Coverage & Linting Caches
+# -----------------------------------------------------------------------------
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+.ruff_cache/
+.mypy_cache/
+
+# -----------------------------------------------------------------------------
+# 8. IDEs & Operating System Files
+# -----------------------------------------------------------------------------
 .idea/
 .vscode/
-.agents/
-skills-lock.json
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+Desktop.ini

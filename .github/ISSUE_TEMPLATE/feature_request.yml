@@ -1,0 +1,43 @@
+name: Feature Request
+description: Propose a new capability, AI provider integration, or workflow improvement for PatchPilot
+title: "[Feat]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Have an idea to make **PatchPilot** better? Share the problem context and your proposed design below.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem Context & Motivation
+      description: What developer friction or limitation does this feature solve?
+      placeholder: "Teams using self-hosted GitLab or custom OpenAI-compatible gateways need a way to pass custom HTTP headers..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed Solution
+      description: Describe how the feature should work (API endpoints, UI changes, `.env` settings, or PR bot commands).
+      placeholder: "Add an optional custom headers JSON field in VaultConfig and pass it to the httpx AsyncClient in app/llm.py..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternative Approaches Considered
+      description: What other solutions or workarounds have you considered, and what are their trade-offs?
+      placeholder: "Using a reverse proxy like LiteLLM in front of PatchPilot works, but adds an extra container to maintain."
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: contribution
+    attributes:
+      label: Willingness to Contribute
+      options:
+        - label: I would like to submit a Pull Request implementing this feature
