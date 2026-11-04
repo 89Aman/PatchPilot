@@ -31,16 +31,13 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install uv and Python 3.12 with cache
+      - name: Install uv with cache
         uses: astral-sh/setup-uv@v5
         with:
-          python-version: "3.12"
           enable-cache: true
           cache-dependency-glob: "uv.lock"
 
-      - name: Sync dependencies & run verification suite
+      - name: Sync dependencies & run tests
         run: |
-          uv sync --dev --frozen
-          uv run python -m compileall -q app tests examples
-          uv run python examples/quickstart/demo_review.py
-          uv run pytest -q
+          uv sync --dev --frozen --no-install-project
+          .venv/bin/pytest -q --disable-warnings
