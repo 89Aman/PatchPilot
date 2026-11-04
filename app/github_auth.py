@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 import hashlib
 import hmac
 import logging
+import re
 import time
 from typing import Any
 import httpx
@@ -10,6 +11,33 @@ from app.config import get_settings
 from app.crypto import decrypt_secret, encrypt_secret
 
 logger = logging.getLogger(__name__)
+
+_EMOJI_RE = re.compile(
+    "["
+    "\U0001F300-\U0001F9FF"
+    "\U0001FA00-\U0001FAFF"
+    "\u2600-\u26FF"
+    "\u2700-\u27BF"
+    "\u2300-\u23FF"
+    "\u2B50"
+    "\uFE0F"
+    "\u200D"
+    "\u2139"
+    "]+",
+    flags=re.UNICODE,
+)
+
+
+def strip_emojis(text: str) -> str:
+    """Remove all emoji characters from text and normalize resulting spacing."""
+    if not text:
+        return ""
+    cleaned = _EMOJI_RE.sub("", text)
+    cleaned = re.sub(r"\|\s{2,}", "| ", cleaned)
+    cleaned = re.sub(r"(#+\s+)\s+", r"\1", cleaned)
+    cleaned = re.sub(r"(>\s+)\s+", r"\1", cleaned)
+    cleaned = re.sub(r"\*\*([^\*\n]+?)\*\*", lambda m: f"**{m.group(1).strip()}**", cleaned)
+    return cleaned
 
 
 def verify_webhook_signature(
@@ -85,6 +113,34 @@ async def get_installation_token(
             await client.aclose()
 
 
+async def fetch_pr_metadata(
+    token: str,
+    repo_full_name: str,
+    pr_number: int,
+    client: httpx.AsyncClient | None = None,
+) -> dict[str, Any]:
+    """Fetch pull request metadata JSON (title, body, head SHA, author, line counts)."""
+    url = f"https://api.github.com/repos/{repo_full_name}/pulls/{pr_number}"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+
+    close_client = False
+    if client is None:
+        client = httpx.AsyncClient(timeout=30.0)
+        close_client = True
+
+    try:
+        response = await client.get(url, headers=headers)
+        response.raise_for_status()
+        return response.json()
+    finally:
+        if close_client:
+            await client.aclose()
+
+
 async def fetch_pr_diff(
     token: str,
     repo_full_name: str,
@@ -138,16 +194,22 @@ def build_review_summary_card(
     poem: str | None = None,
     suggested_tests: list[dict[str, str]] | None = None,
     fallback_used: dict[str, Any] | None = None,
+    requested_by: str | None = None,
+    findings: list[dict[str, Any]] | None = None,
+    verification_status: str | None = None,
 ) -> str:
-    """Generate rich CodeRabbit-grade Markdown summary card with review checks, walkthrough table, and test stubs."""
-    verdict_clean = verdict.upper().strip()
-    verdict_emoji = {
-        "PASS": "🟢",
-        "WARN": "🟡",
-        "BLOCK": "🔴",
-    }.get(verdict_clean, "🔍")
-
+    """Generate clean, emoji-free PatchPilot Markdown summary card with user mention, review checks, walkthrough, verified findings, and test stubs."""
+    verdict_clean = strip_emojis(verdict).upper().strip() or "PASS"
     sha_short = commit_sha[:7] if commit_sha else "HEAD"
+
+    user_tag_part = ""
+    if requested_by and requested_by.strip():
+        clean_user = requested_by.strip().lstrip("@")
+        user_tag_part = f"**Requested by:** @{clean_user} &nbsp;|&nbsp; "
+
+    verif_part = ""
+    if verification_status and verification_status.strip():
+        verif_part = f" &nbsp;|&nbsp; **Verification:** `{strip_emojis(verification_status).strip()}`"
 
     # Failover Alert Notice (if review was completed via fallback provider)
     failover_notice = ""
@@ -156,65 +218,93 @@ def build_review_summary_card(
         cand_model = fallback_used.get("model", "")
         primary_reason = fallback_used.get("primary_reason", "Provider rate limit or outage")
         failover_notice = (
-            f"> ⚡ **Failover Alert**: Primary LLM returned *{primary_reason}*. "
+            f"> **Failover Alert**: Primary LLM returned *{primary_reason}*. "
             f"Review successfully completed via fallback: **{cand_provider}** (`{cand_model}`).\n\n"
         )
 
-    # Optional CodeRabbit Poem Banner
+    # Optional Poem Banner
     poem_section = ""
     if poem and poem.strip():
-        poem_clean = "\n".join(f"> *{line.strip()}*" for line in poem.strip().splitlines() if line.strip())
-        poem_section = f"{poem_clean}\n\n"
+        poem_clean = "\n".join(f"> *{strip_emojis(line).strip()}*" for line in poem.strip().splitlines() if strip_emojis(line).strip())
+        if poem_clean:
+            poem_section = f"{poem_clean}\n\n"
 
     triage_section = ""
     if triage_summary:
-        triage_section = f"### 🏷️ Triage & Impact\n\n{triage_summary}\n\n"
+        triage_section = f"### Triage & Impact\n\n{strip_emojis(triage_summary).strip()}\n\n"
 
     # Review Checks Matrix Badges
     checks_dict = review_checks or agent_statuses
     checks_section = ""
     if checks_dict:
-        rows = [f"| **{category}** | {status} |" for category, status in checks_dict.items()]
+        rows = [
+            f"| **{strip_emojis(str(category)).strip()}** | {strip_emojis(str(status)).strip()} |"
+            for category, status in checks_dict.items()
+        ]
         checks_section = (
-            "### 🎯 Review Checks\n\n"
+            "### Review Checks\n\n"
             "| Category | Status |\n"
             "| :--- | :--- |\n"
             + "\n".join(rows)
             + "\n\n"
         )
 
-
     # File Walkthrough Table
     walkthrough_section = ""
     if walkthrough:
         wt_rows = [
-            f"| `{item.get('file', '')}` | {item.get('impact', '🧹 Refactor')} | {item.get('summary', '')} |"
+            f"| `{item.get('file', '')}` | {strip_emojis(str(item.get('impact', 'Refactor'))).strip() or 'Refactor'} | {strip_emojis(str(item.get('summary', ''))).strip()} |"
             for item in walkthrough
             if item.get("file")
         ]
         if wt_rows:
             walkthrough_section = (
-                "### 🔍 Changes Walkthrough\n\n"
+                "### Changes Walkthrough\n\n"
                 "| File | Impact | Summary |\n"
                 "| :--- | :--- | :--- |\n"
                 + "\n".join(wt_rows)
                 + "\n\n"
             )
 
+    # Verified Findings Detail Section
+    verified_findings_section = ""
+    if findings:
+        finding_blocks: list[str] = []
+        for idx, f in enumerate(findings, 1):
+            if not isinstance(f, dict):
+                continue
+            f_file = f.get("file", "unknown")
+            f_line = f.get("line", "")
+            f_sev = strip_emojis(str(f.get("severity", "risk"))).upper().strip() or "RISK"
+            f_title = strip_emojis(str(f.get("title", "Issue Detected"))).strip()
+            f_exp = strip_emojis(str(f.get("explanation") or f.get("comment") or "")).strip()
+            f_sug = str(f.get("suggestion", "")).strip()
+            line_ref = f" (Line {f_line})" if f_line else ""
+            block = f"#### {idx}. [{f_sev}] `{f_file}`{line_ref} — {f_title}\n\n{f_exp}"
+            if f_sug:
+                block += f"\n\n```suggestion\n{f_sug}\n```"
+            finding_blocks.append(block)
+        if finding_blocks:
+            verified_findings_section = (
+                "### Verified Findings\n\n"
+                + "\n\n---\n\n".join(finding_blocks)
+                + "\n\n"
+            )
+
     security_status = (
-        f"| 🚨 Secret Alerts | **{secret_alerts_count} (CRITICAL)** |\n"
+        f"| Secret Alerts | **{secret_alerts_count} (CRITICAL)** |\n"
         if secret_alerts_count > 0
-        else "| 🛡️ Secret Scan | 🟢 Clean (0 exposed keys) |\n"
+        else "| Secret Scan | Clean (0 exposed keys) |\n"
     )
 
     findings_section = (
-        f"### 📊 Findings Breakdown\n\n"
+        f"### Findings Breakdown\n\n"
         f"| Category | Status / Count |\n"
         f"| :--- | :--- |\n"
         f"{security_status}"
-        f"| 🔴 Bugs | {bug_count} |\n"
-        f"| 🟡 Risks | {risk_count} |\n"
-        f"| 🔵 Nits | {nit_count} |\n\n"
+        f"| Bugs | {bug_count} |\n"
+        f"| Risks | {risk_count} |\n"
+        f"| Nits | {nit_count} |\n\n"
     )
 
     # Suggested Unit Tests Section
@@ -222,30 +312,33 @@ def build_review_summary_card(
     if suggested_tests:
         test_blocks = []
         for idx, st in enumerate(suggested_tests, 1):
-            target = st.get("target_file", "Test")
-            desc = st.get("description", "Suggested edge-case test")
-            code = st.get("code_snippet", "").strip()
+            target = strip_emojis(str(st.get("target_file", "Test"))).strip()
+            desc = strip_emojis(str(st.get("description", "Suggested edge-case test"))).strip()
+            code = str(st.get("code_snippet", "")).strip()
             test_blocks.append(f"**Test {idx} ({target})**: {desc}\n```python\n{code}\n```")
         tests_section = (
             "<details>\n"
-            f"<summary>🧪 <b>Suggested Unit Tests ({len(suggested_tests)})</b></summary>\n\n"
+            f"<summary><b>Suggested Unit Tests ({len(suggested_tests)})</b></summary>\n\n"
             + "\n\n".join(test_blocks)
             + "\n\n</details>\n"
         )
 
-    return (
+    card_body = (
         f"<!-- patchpilot-ai-review -->\n"
-        f"## {verdict_emoji} PatchPilot AI PR Review\n\n"
-        f"**Verdict:** `{verdict_clean}` &nbsp;|&nbsp; **Commit:** `{sha_short}`\n\n"
+        f"## PatchPilot AI PR Review\n\n"
+        f"{user_tag_part}**Verdict:** `{verdict_clean}` &nbsp;|&nbsp; **Commit:** `{sha_short}`{verif_part}\n\n"
         f"{failover_notice}"
         f"{poem_section}"
         f"{triage_section}"
-        f"{summary.strip()}\n\n"
+        f"### Executive Summary\n\n"
+        f"{strip_emojis(summary).strip()}\n\n"
         f"{checks_section}"
         f"{walkthrough_section}"
+        f"{verified_findings_section}"
         f"{findings_section}"
         f"{tests_section}"
     )
+    return strip_emojis(card_body)
 
 
 async def publish_pr_review(
@@ -258,16 +351,19 @@ async def publish_pr_review(
     client: httpx.AsyncClient | None = None,
     triage_summary: str | None = None,
     secret_alerts_count: int = 0,
+    requested_by: str | None = None,
 ) -> dict[str, Any]:
-    """Publish native GitHub review with summary card and filtered inline comments."""
+    """Publish native GitHub review with emoji-free summary card, user mention, and verified inline comments."""
     summary = review_data.get("summary", "Review completed.")
     verdict = review_data.get("verdict", "PASS")
     findings = review_data.get("findings", [])
     agent_statuses = review_data.get("agent_statuses")
+    review_checks = review_data.get("review_checks")
     walkthrough = review_data.get("walkthrough")
     poem = review_data.get("poem")
     suggested_tests = review_data.get("suggested_tests")
     fallback_used = review_data.get("fallback_used")
+    verification_status = review_data.get("verification_status")
 
     bug_count = sum(1 for f in findings if str(f.get("severity", "")).lower() == "bug")
     risk_count = sum(1 for f in findings if str(f.get("severity", "")).lower() == "risk")
@@ -283,20 +379,23 @@ async def publish_pr_review(
         triage_summary=triage_summary,
         secret_alerts_count=secret_alerts_count,
         agent_statuses=agent_statuses,
+        review_checks=review_checks,
         walkthrough=walkthrough,
         poem=poem,
         suggested_tests=suggested_tests,
         fallback_used=fallback_used,
+        requested_by=requested_by,
+        findings=findings,
+        verification_status=verification_status,
     )
-
 
     comments: list[dict[str, Any]] = []
     for f in findings:
         file_path = f.get("file")
         line = f.get("line")
-        severity = str(f.get("severity", "risk")).lower()
-        title = f.get("title", "")
-        explanation = f.get("explanation", "")
+        severity = strip_emojis(str(f.get("severity", "risk"))).lower().strip() or "risk"
+        title = strip_emojis(str(f.get("title", ""))).strip()
+        explanation = strip_emojis(str(f.get("explanation") or f.get("comment") or "")).strip()
         suggestion = f.get("suggestion", "")
 
         if not file_path or line is None:
@@ -306,8 +405,7 @@ async def publish_pr_review(
         if line not in file_valids:
             continue
 
-        sev_icon = {"bug": "🔴", "risk": "🟡", "nit": "🔵"}.get(severity, "ℹ️")
-        comment_body = f"{sev_icon} **[{severity.upper()}] {title}**\n\n{explanation}"
+        comment_body = strip_emojis(f"**[{severity.upper()}] {title}**\n\n{explanation}")
 
         if suggestion and str(suggestion).strip():
             comment_body += f"\n\n```suggestion\n{str(suggestion).strip()}\n```"
@@ -344,12 +442,24 @@ async def publish_pr_review(
         response = await client.post(url, headers=headers, json=payload)
         if response.status_code == 422:
             logger.warning("GitHub 422 for review event %s. Retrying with COMMENT event for %s#%s", review_event, repo_full_name, pr_number)
-            fallback_payload = {
-                "commit_id": head_sha,
-                "body": f"{summary_card}\n\n*(Note: Some inline diff comments could not be anchored)*" if comments else summary_card,
+            fallback_payload: dict[str, Any] = {
+                "body": summary_card,
                 "event": "COMMENT",
             }
+            if head_sha:
+                fallback_payload["commit_id"] = head_sha
             response = await client.post(url, headers=headers, json=fallback_payload)
+
+        if response.status_code == 422:
+            logger.warning("GitHub 422 on pulls/reviews (e.g. closed/merged PR). Falling back to issue comment for %s#%s", repo_full_name, pr_number)
+            return await post_comment_reply(
+                token=token,
+                repo_full_name=repo_full_name,
+                pr_number=pr_number,
+                body=summary_card,
+                review_comment_id=None,
+                client=client,
+            )
 
         response.raise_for_status()
         return response.json()
@@ -366,12 +476,13 @@ async def post_comment_reply(
     review_comment_id: int | str | None = None,
     client: httpx.AsyncClient | None = None,
 ) -> dict[str, Any]:
-    """Post comment reply to either an inline review thread or top-level issue conversation."""
+    """Post emoji-free comment reply to either an inline review thread or top-level issue conversation."""
     close_client = False
     if client is None:
         client = httpx.AsyncClient(timeout=30.0)
         close_client = True
 
+    clean_body = strip_emojis(body)
     headers = {
         "Authorization": f"Bearer {token}",
         "Accept": "application/vnd.github+json",
@@ -381,10 +492,10 @@ async def post_comment_reply(
     try:
         if review_comment_id:
             url = f"https://api.github.com/repos/{repo_full_name}/pulls/{pr_number}/comments/{review_comment_id}/replies"
-            response = await client.post(url, headers=headers, json={"body": body})
+            response = await client.post(url, headers=headers, json={"body": clean_body})
         else:
             url = f"https://api.github.com/repos/{repo_full_name}/issues/{pr_number}/comments"
-            response = await client.post(url, headers=headers, json={"body": body})
+            response = await client.post(url, headers=headers, json={"body": clean_body})
 
         response.raise_for_status()
         return response.json()

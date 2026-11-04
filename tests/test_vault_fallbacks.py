@@ -353,7 +353,7 @@ def test_summary_card_failover_notice_sanitized():
         },
     )
 
-    assert "⚡ **Failover Alert**" in card
+    assert "**Failover Alert**" in card
     assert "Primary LLM returned *Rate limit exceeded (429)*" in card
     assert "Review successfully completed via fallback: **Groq** (`llama-3.3-70b-versatile`)" in card
     # Ensure no raw URLs, auth tokens or secrets leak into card

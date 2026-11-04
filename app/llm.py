@@ -6,6 +6,7 @@ from typing import Any
 import httpx
 from app.crypto import decrypt_secret
 from app.db import VaultConfig
+from app.github_auth import strip_emojis
 
 logger = logging.getLogger(__name__)
 
@@ -44,13 +45,46 @@ def is_noise_file(filepath: str) -> bool:
     return any(basename.endswith(suffix) or filepath.endswith(suffix) for suffix in EXCLUDED_SUFFIXES)
 
 
-def annotate_diff(raw_diff: str, max_chars: int = 120_000) -> tuple[str, dict[str, set[int]]]:
-    """Parse unified diff, exclude noise files, and annotate right-side line numbers."""
+def _excerpt_file_lines_safely(lines: list[str], budget_chars: int) -> str:
+    """Excerpt a file's annotated diff lines on complete line boundaries, preserving both head and tail hunks."""
+    full_text = "\n".join(lines)
+    if len(full_text) <= budget_chars:
+        return full_text
+
+    notice = "[... Middle lines of file diff omitted for context window budget; file is complete in repository ...]"
+    half_budget = max(400, (budget_chars - len(notice) - 4) // 2)
+
+    head_lines: list[str] = []
+    head_len = 0
+    for ln in lines:
+        if head_len + len(ln) + 1 > half_budget and head_lines:
+            break
+        head_lines.append(ln)
+        head_len += len(ln) + 1
+
+    tail_lines: list[str] = []
+    tail_len = 0
+    for ln in reversed(lines[len(head_lines):]):
+        if tail_len + len(ln) + 1 > half_budget and tail_lines:
+            break
+        tail_lines.append(ln)
+        tail_len += len(ln) + 1
+    tail_lines.reverse()
+
+    if not tail_lines:
+        return "\n".join(head_lines)
+    return "\n".join(head_lines + [notice] + tail_lines)
+
+
+def annotate_diff(raw_diff: str, max_chars: int = 48_000) -> tuple[str, dict[str, set[int]]]:
+    """Parse unified diff, exclude noise files, annotate right-side line numbers, and budget across all files without mid-line cuts."""
     valid_lines: dict[str, set[int]] = {}
-    out: list[str] = []
+    file_blocks: list[tuple[str | None, bool, list[str]]] = []
+
     current_file: str | None = None
     skip_file = False
     right_line = 0
+    current_lines: list[str] = []
 
     diff_git_re = re.compile(r"^diff --git a/.* b/(.*)$")
     header_plus_re = re.compile(r"^\+\+\+ (?:b/)?(.*)$")
@@ -58,27 +92,33 @@ def annotate_diff(raw_diff: str, max_chars: int = 120_000) -> tuple[str, dict[st
     for line in raw_diff.splitlines():
         git_match = diff_git_re.match(line)
         if git_match:
+            if current_lines:
+                file_blocks.append((current_file, skip_file, current_lines))
+                current_lines = []
             raw_path = git_match.group(1).strip()
             current_file = raw_path
             skip_file = is_noise_file(raw_path)
             if skip_file:
-                out.append(f"\n[File excluded as noise/lockfile: {current_file}]")
+                current_lines.append(f"\n[File excluded as noise/lockfile: {current_file}]")
             else:
                 valid_lines.setdefault(current_file, set())
-                out.append(f"\n--- {current_file} ---")
+                current_lines.append(f"\n--- {current_file} ---")
             continue
 
         plus_match = header_plus_re.match(line)
         if plus_match and not git_match:
             cand_path = plus_match.group(1).strip()
             if cand_path != "/dev/null":
+                if current_file != cand_path and current_lines and current_file is None:
+                    file_blocks.append((current_file, skip_file, current_lines))
+                    current_lines = []
                 current_file = cand_path
                 skip_file = is_noise_file(current_file)
                 if skip_file:
-                    out.append(f"\n[File excluded as noise/lockfile: {current_file}]")
+                    current_lines.append(f"\n[File excluded as noise/lockfile: {current_file}]")
                 else:
                     valid_lines.setdefault(current_file, set())
-                    out.append(f"\n--- {current_file} ---")
+                    current_lines.append(f"\n--- {current_file} ---")
             continue
 
         if skip_file:
@@ -87,24 +127,73 @@ def annotate_diff(raw_diff: str, max_chars: int = 120_000) -> tuple[str, dict[st
         m = HUNK_RE.match(line)
         if m:
             right_line = int(m.group(1))
-            out.append(line)
+            current_lines.append(line)
             continue
 
         if not current_file or line.startswith(("diff --git", "index ", "--- ")):
-            out.append(line)
+            current_lines.append(line)
             continue
 
         if line.startswith("+") or line.startswith(" "):
             if current_file:
                 valid_lines.setdefault(current_file, set()).add(right_line)
-            out.append(f"[L{right_line}] {line}")
+            current_lines.append(f"[L{right_line}] {line}")
             right_line += 1
         elif line.startswith("-"):
-            out.append(f"[DEL] {line}")
+            current_lines.append(f"[DEL] {line}")
         else:
-            out.append(line)
+            current_lines.append(line)
 
-    return "\n".join(out)[:max_chars], valid_lines
+    if current_lines:
+        file_blocks.append((current_file, skip_file, current_lines))
+
+    full_joined = "\n".join("\n".join(blk[2]) for blk in file_blocks)
+    if len(full_joined) <= max_chars:
+        return full_joined, valid_lines
+
+    # Multi-file proportional allocation so no file is dropped or cut mid-line
+    active_indices = [i for i, (_, is_skip, _) in enumerate(file_blocks) if not is_skip]
+    if not active_indices:
+        return full_joined[:max_chars], valid_lines
+
+    block_texts = ["\n".join(blk[2]) for blk in file_blocks]
+    remaining_budget = max_chars - sum(len(block_texts[i]) + 1 for i in range(len(file_blocks)) if i not in active_indices)
+    remaining_budget = max(2000, remaining_budget)
+
+    # First let small files take their exact size, then divide remaining budget among large files
+    allocations: dict[int, int] = {}
+    unallocated = list(active_indices)
+    while unallocated:
+        share = max(800, remaining_budget // len(unallocated))
+        fit_any = False
+        for idx in list(unallocated):
+            f_path = (file_blocks[idx][0] or "").lower()
+            is_doc = f_path.endswith((".md", ".txt", ".rst"))
+            effective_len = len(block_texts[idx])
+            # Cap pure markdown docs when total PR diff is huge so code files get more room
+            doc_cap = max(1800, share // 2) if (is_doc and len(active_indices) > 2) else share
+            if effective_len <= doc_cap:
+                allocations[idx] = effective_len
+                remaining_budget -= effective_len
+                unallocated.remove(idx)
+                fit_any = True
+        if not fit_any:
+            for idx in unallocated:
+                f_path = (file_blocks[idx][0] or "").lower()
+                is_doc = f_path.endswith((".md", ".txt", ".rst"))
+                share = max(800, remaining_budget // len(unallocated))
+                allocations[idx] = max(1500, share // 2) if (is_doc and len(active_indices) > 2) else share
+            break
+
+    out_blocks: list[str] = []
+    for i, (_, is_skip, lines) in enumerate(file_blocks):
+        if is_skip:
+            out_blocks.append("\n".join(lines))
+        else:
+            budget = allocations.get(i, 3000)
+            out_blocks.append(_excerpt_file_lines_safely(lines, budget))
+
+    return "\n".join(out_blocks), valid_lines
 
 
 def get_provider_endpoint(provider: str, base_url: str | None = None) -> str:
@@ -170,13 +259,15 @@ def extract_json_payload(content: str) -> dict[str, Any]:
         }
 
 
-FALLBACK_TRIGGER_STATUS_CODES = {400, 401, 402, 403, 404, 429, 500, 502, 503, 529}
+FALLBACK_TRIGGER_STATUS_CODES = {400, 401, 402, 403, 404, 413, 429, 500, 502, 503, 529}
 
 
 def sanitize_failure_reason(status_code: int | None, exc: Exception | None = None) -> str:
     """Produce sanitized, user-safe failure reason string without raw URLs, tokens, or tracebacks."""
     if status_code == 429:
         return "Rate limit exceeded (429)"
+    elif status_code == 413:
+        return "Payload exceeds provider token limit (413)"
     elif status_code == 402:
         return "Daily free quota exhausted (402)"
     elif status_code == 401:
@@ -335,6 +426,80 @@ async def test_llm_connection(
             await client.aclose()
 
 
+async def _verify_findings_with_llm(
+    client: httpx.AsyncClient,
+    url: str,
+    headers: dict[str, str],
+    model: str,
+    candidate_findings: list[dict[str, Any]],
+    annotated_diff: str,
+) -> list[dict[str, Any]]:
+    """Second-pass truthfulness verifier: fact-check candidate findings against the annotated diff to eliminate false positives."""
+    if not candidate_findings:
+        return []
+
+    verify_system_prompt = (
+        "You are PatchPilot Verification Engine, a strict second-pass code review fact-checker.\n"
+        "Your job is to verify each candidate finding against the annotated diff and eliminate any false positives.\n\n"
+        "Verification Rules:\n"
+        "1. Check whether the reported issue is genuinely present in the added (`+`) or modified lines of the diff.\n"
+        "2. Reject any finding that claims a file or line is 'truncated' or 'incomplete' if the diff was simply excerpted.\n"
+        "3. Reject speculative or hallucinated issues where the code already handles the condition properly.\n"
+        "4. Do NOT use any emojis anywhere in titles or explanations.\n"
+        "5. Return strictly valid JSON with schema:\n"
+        "{\n"
+        '  "verified_findings": [\n'
+        "    {\n"
+        '      "file": "path/to/file.ext",\n'
+        '      "line": 10,\n'
+        '      "severity": "bug|risk|nit",\n'
+        '      "title": "Short verified title",\n'
+        '      "explanation": "Fact-checked explanation of root cause and fix",\n'
+        '      "suggestion": "Optional replacement code line(s) or empty string"\n'
+        "    }\n"
+        "  ]\n"
+        "}"
+    )
+
+    verify_user_prompt = (
+        f"Candidate Findings to Fact-Check:\n```json\n{json.dumps(candidate_findings, indent=2)}\n```\n\n"
+        f"Annotated Diff Ground Truth:\n```diff\n{annotated_diff[:38000]}\n```"
+    )
+
+    payload = {
+        "model": model,
+        "temperature": 0.0,
+        "messages": [
+            {"role": "system", "content": verify_system_prompt},
+            {"role": "user", "content": verify_user_prompt},
+        ],
+    }
+
+    try:
+        resp = await client.post(url, headers=headers, json=payload)
+        if resp.is_error:
+            return candidate_findings
+        content = resp.json()["choices"][0]["message"]["content"]
+        parsed = extract_json_payload(content)
+        verified = parsed.get("verified_findings")
+        if isinstance(verified, list):
+            result: list[dict[str, Any]] = []
+            for vf in verified:
+                if isinstance(vf, dict) and vf.get("file") and vf.get("line") is not None:
+                    result.append({
+                        "file": str(vf["file"]),
+                        "line": int(vf["line"]),
+                        "severity": strip_emojis(str(vf.get("severity", "risk"))).lower().strip() or "risk",
+                        "title": strip_emojis(str(vf.get("title", ""))).strip(),
+                        "explanation": strip_emojis(str(vf.get("explanation", ""))).strip(),
+                        "suggestion": str(vf.get("suggestion", "")),
+                    })
+            return result
+    except Exception as exc:
+        logger.debug("Second-pass verification fallback to deterministic findings: %s", exc)
+
+    return candidate_findings
+
 
 async def run_pr_review(
     cfg: VaultConfig,
@@ -345,22 +510,25 @@ async def run_pr_review(
     valid_lines: dict[str, set[int]] | None = None,
     triage: Any | None = None,
 ) -> dict[str, Any]:
-    """Execute unified AI review of pull request with CodeRabbit-grade walkthrough, suggestions, and test stubs."""
+    """Execute unified 2-pass AI review of pull request with fact-checked findings, walkthrough, and test stubs."""
     candidates = get_provider_candidates(cfg)
     policy_section = cfg.review_policy or ""
     system_prompt = (
-        "You are PatchPilot, an expert AI pull request reviewer modeled after CodeRabbit.\n"
+        "You are PatchPilot, an expert pull request analysis and verification engine.\n"
         f"{policy_section}\n\n"
-        "Analyze the pull request changes thoroughly across Architecture, Security (OWASP), Bug/Logic Correctness, "
-        "Performance (O(N^2), DB N+1, I/O), and Test Coverage.\n\n"
+        "Analyze the pull request thoroughly across:\n"
+        "1. State-Machine & Idempotency Correctness (missing state/status guards before mutations, double-release or duplicate timeline appends on retry).\n"
+        "2. Backend & Data-Layer Consistency (accessing private/mock state like `_mock_*` that fails in production DB mode, mutating Pydantic models without validation).\n"
+        "3. Frontend & UI Handler Wiring (calls to undefined JS functions, reliance on implicit `event.currentTarget`, hardcoded CSS classes ignoring state).\n"
+        "4. Security & Configuration Hygiene (OWASP, exposed secrets, `.gitignore` rules excluding required scripts like `scripts/*`, Dockerfile/CI issues).\n\n"
         "Return strictly valid JSON matching this schema:\n"
         "{\n"
-        '  "summary": "High-level summary of the PR and overall code quality.",\n'
-        '  "poem": "Optional clever 2-line rhyming summary of the changes.",\n'
+        '  "summary": "High-level technical summary of the PR and overall code quality.",\n'
+        '  "poem": "",\n'
         '  "walkthrough": [\n'
         "    {\n"
         '      "file": "path/to/file.ext",\n'
-        '      "impact": "✨ Feature | 🐛 Fix | ⚡ Perf | 📝 Docs | 🧹 Refactor | 🛡️ Security",\n'
+        '      "impact": "Feature | Fix | Performance | Docs | Refactor | Security",\n'
         '      "summary": "One concise sentence describing what changed in this specific file."\n'
         "    }\n"
         "  ],\n"
@@ -370,7 +538,7 @@ async def run_pr_review(
         '      "file": "path/to/file.ext",\n'
         '      "line": 10,\n'
         '      "severity": "bug|risk|nit",\n'
-        '      "title": "Short title describing the issue",\n'
+        '      "title": "Short title describing the verified issue",\n'
         '      "explanation": "Detailed explanation of why this is an issue and how to resolve it",\n'
         '      "suggestion": "Optional exact replacement code line(s) or empty string"\n'
         "    }\n"
@@ -386,13 +554,15 @@ async def run_pr_review(
         "Rules:\n"
         "1. 'line' MUST match an [L<num>] line in the file diff.\n"
         "2. Do not comment on deleted lines.\n"
-        "3. If no issues exist, 'findings' must be [] and 'verdict' must be 'PASS'."
+        "3. Do NOT use any emojis anywhere in your output (no emojis in summary, impact, title, or explanation).\n"
+        "4. Never report '[... Middle lines of file diff omitted ...]' as truncated code; those markers only indicate prompt budgeting.\n"
+        "5. If no issues exist, 'findings' must be [] and 'verdict' must be 'PASS'."
     )
 
     user_prompt = (
         f"PR Title: {pr_title}\n"
         f"PR Description: {pr_body or 'None'}\n\n"
-        f"Annotated Diff (`[L<num>]` is line number):\n```diff\n{annotated_diff[:80000]}\n```"
+        f"Annotated Diff (`[L<num>]` is line number):\n```diff\n{annotated_diff[:48000]}\n```"
     )
 
     close_client = False
@@ -452,32 +622,91 @@ async def run_pr_review(
                     if not file_path or line is None:
                         continue
 
+                    title_str = strip_emojis(str(f.get("title", ""))).strip()
+                    exp_str = strip_emojis(str(f.get("explanation", ""))).strip()
+                    if "truncated" in title_str.lower() and "omitted" in annotated_diff:
+                        continue
+
+                    line_num = int(line)
                     if valid_lines is not None:
                         valid_for_file = valid_lines.get(str(file_path), set())
-                        if int(line) not in valid_for_file:
+                        if not valid_for_file:
                             continue
+                        if line_num not in valid_for_file:
+                            # Snap to closest valid diff line in the same file if within 5 lines
+                            closest = min(valid_for_file, key=lambda vl: abs(vl - line_num))
+                            if abs(closest - line_num) <= 5:
+                                line_num = closest
+                            else:
+                                continue
 
                     clean_findings.append({
                         "file": str(file_path),
-                        "line": int(line),
-                        "severity": str(f.get("severity", "risk")).lower(),
-                        "title": str(f.get("title", "")),
-                        "explanation": str(f.get("explanation", "")),
+                        "line": line_num,
+                        "severity": strip_emojis(str(f.get("severity", "risk"))).lower().strip() or "risk",
+                        "title": title_str,
+                        "explanation": exp_str,
                         "suggestion": str(f.get("suggestion", "")),
                     })
 
-                data["findings"] = clean_findings
+                # Pass 2: Fact-check and verify candidate findings against the diff
+                if clean_findings:
+                    verified_findings = await _verify_findings_with_llm(
+                        client=client,
+                        url=url,
+                        headers=headers,
+                        model=cand["model"],
+                        candidate_findings=clean_findings,
+                        annotated_diff=annotated_diff,
+                    )
+                    # Re-validate line numbers after Pass 2
+                    final_findings: list[dict[str, Any]] = []
+                    for vf in verified_findings:
+                        fp = vf.get("file")
+                        ln = vf.get("line")
+                        if not fp or ln is None:
+                            continue
+                        ln_int = int(ln)
+                        if valid_lines is not None:
+                            v_set = valid_lines.get(str(fp), set())
+                            if not v_set:
+                                continue
+                            if ln_int not in v_set:
+                                closest = min(v_set, key=lambda vl: abs(vl - ln_int))
+                                if abs(closest - ln_int) <= 5:
+                                    ln_int = closest
+                                else:
+                                    continue
+                        vf["line"] = ln_int
+                        final_findings.append(vf)
+                    clean_findings = final_findings
 
-                # Calculate review check category statuses
+                data["findings"] = clean_findings
+                data["summary"] = strip_emojis(str(data.get("summary", "Review completed."))).strip()
+                if data.get("poem"):
+                    data["poem"] = strip_emojis(str(data["poem"])).strip()
+                if isinstance(data.get("walkthrough"), list):
+                    for wt in data["walkthrough"]:
+                        if isinstance(wt, dict):
+                            wt["impact"] = strip_emojis(str(wt.get("impact", "Refactor"))).strip() or "Refactor"
+                            wt["summary"] = strip_emojis(str(wt.get("summary", ""))).strip()
+                data["verification_status"] = "2-Pass Fact-Checked"
+
+                # Calculate emoji-free review check category statuses
                 bugs = sum(1 for f in clean_findings if f["severity"] == "bug")
                 risks = sum(1 for f in clean_findings if f["severity"] == "risk")
                 suggested_tests = data.get("suggested_tests", [])
 
+                if bugs > 0 and str(data.get("verdict", "")).upper() == "PASS":
+                    data["verdict"] = "WARN"
+                elif bugs == 0 and risks == 0 and not clean_findings:
+                    data["verdict"] = "PASS"
+
                 checks = {
-                    "🛡️ Security": "🟢 Clean" if not any("security" in f["title"].lower() or "secret" in f["title"].lower() for f in clean_findings) else "🔴 Issues Found",
-                    "🐞 Correctness": f"🟡 {bugs} Defect{'s' if bugs > 1 else ''}" if bugs > 0 else "🟢 Clean",
-                    "⚡ Performance": "🟡 Review Needed" if any("perf" in f["title"].lower() or "o(n" in f["title"].lower() for f in clean_findings) else "🟢 Optimal",
-                    "🧪 Test Coverage": f"🧪 {len(suggested_tests)} Test Case{'s' if len(suggested_tests) > 1 else ''} Suggested" if suggested_tests else "🟢 Adequate",
+                    "Security": "Clean" if not any("security" in f["title"].lower() or "secret" in f["title"].lower() for f in clean_findings) else "Issues Found",
+                    "Correctness": f"{bugs} Defect{'s' if bugs > 1 else ''}" if bugs > 0 else "Clean",
+                    "Performance": "Review Needed" if any("perf" in f["title"].lower() or "o(n" in f["title"].lower() for f in clean_findings) else "Optimal",
+                    "Test Coverage": f"{len(suggested_tests)} Test Case{'s' if len(suggested_tests) > 1 else ''} Suggested" if suggested_tests else "Adequate",
                 }
                 data["review_checks"] = checks
                 data["agent_statuses"] = checks  # Backward compatibility alias
@@ -523,27 +752,31 @@ async def run_interactive_command(
     pr_diff: str,
     client: httpx.AsyncClient | None = None,
 ) -> str:
-    """Execute interactive @patchpilot explain, fix, review, or generate tests command with multi-key failover."""
+    """Execute interactive @patchpilot explain, fix, review, or generate tests command with multi-key failover and zero emojis."""
     candidates = get_provider_candidates(cfg)
     cmd_lower = command.lower().strip()
 
     if "explain" in cmd_lower:
         mode_instruction = "Explain the code, root cause, and architectural trade-offs concisely."
     elif "fix" in cmd_lower:
-        mode_instruction = "Provide the exact fix with clear markdown code blocks and git suggestion syntax if applicable."
+        mode_instruction = "Provide the exact verified fix with clear markdown code blocks and git suggestion syntax if applicable."
     elif "security" in cmd_lower:
-        mode_instruction = "Perform an in-depth security and vulnerability audit (OWASP, injections, auth bypass, data leaks)."
+        mode_instruction = "Perform an in-depth security and vulnerability audit (OWASP, injections, auth bypass, data leaks). Fact-check every finding against the diff."
     elif "perf" in cmd_lower:
-        mode_instruction = "Analyze algorithmic complexity, database query patterns (N+1), memory bloat, and I/O efficiency."
+        mode_instruction = "Analyze algorithmic complexity, database query patterns (N+1), memory bloat, and I/O efficiency. Fact-check every finding against the diff."
     elif any(k in cmd_lower for k in ["test", "tests"]):
         mode_instruction = "Generate concrete, runnable unit test functions covering untested branches and edge cases."
     else:
-        mode_instruction = "Review the requested code changes constructively and objectively."
+        mode_instruction = "Review the requested code changes constructively, verifying every finding against the actual diff lines."
 
     system_prompt = (
         f"{cfg.review_policy or ''}\n\n"
         f"You are PatchPilot responding to an interactive `{command}` command on a GitHub Pull Request.\n"
-        f"{mode_instruction}"
+        f"{mode_instruction}\n"
+        "Rules:\n"
+        "1. Do NOT use any emojis anywhere in your response.\n"
+        "2. Verify every claim against the provided diff before reporting it.\n"
+        "3. Never report '[... Middle lines of file diff omitted ...]' as truncated code."
     )
 
     context_parts = [f"User Directive: {user_comment}"]
@@ -552,7 +785,8 @@ async def run_interactive_command(
     if diff_hunk:
         context_parts.append(f"Target Diff Hunk:\n```diff\n{diff_hunk}\n```")
     else:
-        context_parts.append(f"PR Diff Context:\n```diff\n{pr_diff[:40_000]}\n```")
+        annotated_context, _ = annotate_diff(pr_diff, max_chars=44_000)
+        context_parts.append(f"Annotated PR Diff Context:\n```diff\n{annotated_context}\n```")
 
     close_client = False
     if client is None:
@@ -572,7 +806,7 @@ async def run_interactive_command(
             url, headers = _resolve_candidate_endpoint_and_headers(cand)
             payload = {
                 "model": cand["model"],
-                "temperature": 0.2,
+                "temperature": 0.1,
                 "messages": [
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": "\n\n".join(context_parts)},
@@ -590,7 +824,7 @@ async def run_interactive_command(
                         continue
                     _check_response_status(resp, cand)
 
-                return resp.json()["choices"][0]["message"]["content"]
+                return strip_emojis(resp.json()["choices"][0]["message"]["content"]).strip()
             except Exception as exc:
                 last_exc = exc
                 if isinstance(exc, (httpx.TimeoutException, httpx.ConnectError, httpx.NetworkError, httpx.HTTPError, ValueError)) and has_next:

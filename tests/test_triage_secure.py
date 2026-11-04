@@ -162,7 +162,7 @@ async def test_apply_pr_labels_api(monkeypatch):
 
 
 def test_build_review_summary_card_with_triage_and_security():
-    """Verify review summary card renders triage metrics and secret alerts."""
+    """Verify review summary card renders triage metrics and secret alerts without emojis."""
     card = build_review_summary_card(
         verdict="PASS",
         commit_sha="abcdef123456",
@@ -174,10 +174,10 @@ def test_build_review_summary_card_with_triage_and_security():
         secret_alerts_count=0,
     )
     assert "PatchPilot AI PR Review" in card
-    assert "### 🏷️ Triage & Impact" in card
+    assert "### Triage & Impact" in card
     assert "`size:S`" in card
-    assert "🛡️ Secret Scan" in card
-    assert "🟢 Clean" in card
+    assert "Secret Scan" in card
+    assert "Clean (0 exposed keys)" in card
 
     # Test alert status when secrets detected
     card_alert = build_review_summary_card(
@@ -189,5 +189,5 @@ def test_build_review_summary_card_with_triage_and_security():
         nit_count=0,
         secret_alerts_count=1,
     )
-    assert "🚨 Secret Alerts" in card_alert
+    assert "Secret Alerts" in card_alert
     assert "**1 (CRITICAL)**" in card_alert

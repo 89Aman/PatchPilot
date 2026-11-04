@@ -33,12 +33,14 @@ from app.github_auth import (
     create_session_jwt,
     exchange_oauth_code,
     fetch_pr_diff,
+    fetch_pr_metadata,
     fetch_user_installations_and_repos,
     fetch_user_profile,
     get_installation_token,
     get_oauth_authorize_url,
     post_comment_reply,
     publish_pr_review,
+    strip_emojis,
     verify_session_jwt,
     verify_webhook_signature,
 )
@@ -1192,20 +1194,24 @@ async def handle_pr_event(payload: dict[str, Any]) -> None:
                 if "findings" not in review_data or not isinstance(review_data["findings"], list):
                     review_data["findings"] = []
                 for sf in secret_findings:
+                    remediation_msg = (
+                        f"**CRITICAL SECURITY ALERT**: Potential exposed credential `{sf.matched_text_masked}` detected.\n\n"
+                        f"**Remediation**:\n"
+                        f"1. Immediately revoke and rotate this secret in your provider console.\n"
+                        f"2. Remove the secret from code and scrub git history using `git-filter-repo`.\n"
+                        f"3. Store credentials using environment variables or a secrets manager."
+                    )
                     review_data["findings"].insert(0, {
                         "file": sf.file_path,
                         "line": sf.line_number,
                         "severity": "bug",
-                        "title": f"🚨 Secret Leak Detected: {sf.secret_type}",
-                        "comment": (
-                            f"**CRITICAL SECURITY ALERT**: Potential exposed credential `{sf.matched_text_masked}` detected.\n\n"
-                            f"**Remediation**:\n"
-                            f"1. Immediately revoke and rotate this secret in your provider console.\n"
-                            f"2. Remove the secret from code and scrub git history using `git-filter-repo`.\n"
-                            f"3. Store credentials using environment variables or a secrets manager."
-                        ),
+                        "title": f"Secret Leak Detected: {sf.secret_type}",
+                        "explanation": remediation_msg,
+                        "comment": remediation_msg,
                     })
                 review_data["verdict"] = "BLOCK"
+
+            pr_author = pr.get("user", {}).get("login") or owner
 
             # 6. Publish native GitHub review with triage summary & security badges
             await publish_pr_review(
@@ -1218,6 +1224,7 @@ async def handle_pr_event(payload: dict[str, Any]) -> None:
                 client=client,
                 triage_summary=triage.summary_text,
                 secret_alerts_count=secret_count,
+                requested_by=pr_author,
             )
             logger.info("Published review and triage for %s#%s (size: %s, risk: %s)", repo_full_name, pr_number, triage.size_tier, triage.risk_level)
     except Exception as exc:
@@ -1225,7 +1232,7 @@ async def handle_pr_event(payload: dict[str, Any]) -> None:
 
 
 async def handle_comment_event(event_type: str, payload: dict[str, Any]) -> None:
-    """Background task to answer @patchpilot explain or @patchpilot fix commands."""
+    """Background task to run full verified PR review or answer interactive @patchpilot commands."""
     try:
         comment = payload.get("comment", {})
         comment_body = comment.get("body", "")
@@ -1233,12 +1240,13 @@ async def handle_comment_event(event_type: str, payload: dict[str, Any]) -> None
         if not match:
             return
 
-        command = match.group(1).lower()
+        command = match.group(1).lower().strip()
         extra_prompt = match.group(2).strip() or comment_body
         installation_id = payload.get("installation", {}).get("id")
         repository = payload.get("repository", {})
         repo_full_name = repository.get("full_name", "")
         owner = repository.get("owner", {}).get("login", "")
+        comment_user = comment.get("user", {}).get("login") or payload.get("sender", {}).get("login") or owner
 
         if event_type == "pull_request_review_comment":
             pr_number = payload.get("pull_request", {}).get("number")
@@ -1267,11 +1275,92 @@ async def handle_comment_event(event_type: str, payload: dict[str, Any]) -> None
                 review_policy=DEFAULT_POLICY,
             )
 
-        async with httpx.AsyncClient(timeout=60.0) as client:
+        async with httpx.AsyncClient(timeout=90.0) as client:
             token = await get_installation_token(installation_id, client=client)
             pr_diff = "" if diff_hunk else await fetch_pr_diff(token, repo_full_name, pr_number, client=client)
 
             try:
+                # Full structured PatchPilot PR review when triggered via top-level 'review' command
+                if event_type == "issue_comment" and command == "review" and not diff_hunk:
+                    pr_meta: dict[str, Any] = {}
+                    try:
+                        pr_meta = await fetch_pr_metadata(token, repo_full_name, pr_number, client=client)
+                    except Exception as meta_exc:
+                        logger.warning("Could not fetch PR metadata for %s#%s: %s", repo_full_name, pr_number, meta_exc)
+
+                    head_sha = pr_meta.get("head", {}).get("sha", "")
+                    pr_title = pr_meta.get("title") or payload.get("issue", {}).get("title", f"Pull Request #{pr_number}")
+                    pr_body = pr_meta.get("body") or payload.get("issue", {}).get("body") or ""
+                    additions = pr_meta.get("additions") or sum(
+                        1 for ln in pr_diff.splitlines() if ln.startswith("+") and not ln.startswith("+++")
+                    )
+                    deletions = pr_meta.get("deletions") or sum(
+                        1 for ln in pr_diff.splitlines() if ln.startswith("-") and not ln.startswith("---")
+                    )
+
+                    annotated_diff, valid_lines = annotate_diff(pr_diff)
+                    secret_findings = scan_diff_for_secrets(pr_diff)
+                    secret_count = len(secret_findings)
+
+                    files_list = list(valid_lines.keys())
+                    triage = compute_pr_triage(
+                        files_changed=files_list,
+                        additions=additions,
+                        deletions=deletions,
+                        has_secret_findings=secret_count > 0,
+                    )
+                    await apply_pr_labels(token, repo_full_name, pr_number, triage.labels, client=client)
+
+                    clean_annotated_diff = (
+                        sanitize_diff_text(annotated_diff, secret_findings) if secret_count > 0 else annotated_diff
+                    )
+
+                    review_data = await run_pr_review(
+                        cfg=cfg,
+                        pr_title=pr_title,
+                        pr_body=pr_body,
+                        annotated_diff=clean_annotated_diff,
+                        client=client,
+                        valid_lines=valid_lines,
+                        triage=triage,
+                    )
+
+                    if secret_findings:
+                        if "findings" not in review_data or not isinstance(review_data["findings"], list):
+                            review_data["findings"] = []
+                        for sf in secret_findings:
+                            remediation_msg = (
+                                f"**CRITICAL SECURITY ALERT**: Potential exposed credential `{sf.matched_text_masked}` detected.\n\n"
+                                f"**Remediation**:\n"
+                                f"1. Immediately revoke and rotate this secret in your provider console.\n"
+                                f"2. Remove the secret from code and scrub git history using `git-filter-repo`.\n"
+                                f"3. Store credentials using environment variables or a secrets manager."
+                            )
+                            review_data["findings"].insert(0, {
+                                "file": sf.file_path,
+                                "line": sf.line_number,
+                                "severity": "bug",
+                                "title": f"Secret Leak Detected: {sf.secret_type}",
+                                "explanation": remediation_msg,
+                                "comment": remediation_msg,
+                            })
+                        review_data["verdict"] = "BLOCK"
+
+                    await publish_pr_review(
+                        token=token,
+                        repo_full_name=repo_full_name,
+                        pr_number=pr_number,
+                        head_sha=head_sha,
+                        review_data=review_data,
+                        valid_lines=valid_lines,
+                        client=client,
+                        triage_summary=triage.summary_text,
+                        secret_alerts_count=secret_count,
+                        requested_by=comment_user,
+                    )
+                    logger.info("Published full verified PR review for @%s on %s#%s", comment_user, repo_full_name, pr_number)
+                    return
+
                 reply_md = await run_interactive_command(
                     cfg=cfg,
                     command=command,
@@ -1281,18 +1370,28 @@ async def handle_comment_event(event_type: str, payload: dict[str, Any]) -> None
                     pr_diff=pr_diff,
                     client=client,
                 )
-                body_text = f"### ✈️ PatchPilot (`{command}`)\n\n{reply_md}"
+                body_text = strip_emojis(
+                    f"## PatchPilot Command Response (`{command}`)\n\n"
+                    f"**Requested by:** @{comment_user} &nbsp;|&nbsp; **Target:** `{repo_full_name}#{pr_number}`\n\n"
+                    f"{reply_md}"
+                )
             except Exception as llm_exc:
                 logger.warning("Interactive LLM call failed on %s#%s: %s", repo_full_name, pr_number, llm_exc)
                 has_key = _vault_has_usable_key(cfg)
+                active_cands = [
+                    c for c in get_provider_candidates(cfg)
+                    if c.get("encrypted_api_key") or str(c.get("provider", "")).lower() == "ollama"
+                ]
+                active_cand = active_cands[-1] if active_cands else {"provider": cfg.provider, "model": cfg.model}
                 status_detail = (
                     "No API key is currently stored in your BYOK Vault."
                     if not has_key
-                    else f"Configured provider (`{cfg.provider}` / `{cfg.model}`) rejected the request or key."
+                    else f"Configured provider (`{active_cand['provider']}` / `{active_cand['model']}`) rejected the request or key."
                 )
-                body_text = (
-                    f"### ✈️ PatchPilot (`{command}`)\n\n"
-                    f"⚠️ **Action Required — AI Provider Key Missing or Invalid**\n\n"
+                body_text = strip_emojis(
+                    f"## PatchPilot Command Response (`{command}`)\n\n"
+                    f"**Requested by:** @{comment_user} &nbsp;|&nbsp; **Status:** `Action Required`\n\n"
+                    f"**AI Provider Key Missing or Invalid**\n\n"
                     f"PatchPilot received your `{command}` command on `{repo_full_name}#{pr_number}` "
                     f"(diff fetched: `{len(pr_diff):,}` chars), but could not complete the AI analysis: {status_detail}\n\n"
                     f"**How to fix in 30 seconds:**\n"
