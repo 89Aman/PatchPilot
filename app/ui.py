@@ -833,8 +833,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           document.getElementById("loginCallout").classList.add("hidden");
           document.getElementById("userAvatar").src = data.user.avatar_url;
           document.getElementById("userName").textContent = data.user.name || data.user.login;
-          document.getElementById("userLogin").textContent = `@${data.user.login}`;
-          document.getElementById("owner").value = data.user.login;
+          document.getElementById("userLogin").textContent = `@${data.user.github_username || data.user.login}`;
+          document.getElementById("owner").value = data.user.github_username || data.user.login;
+          loadVault();
           const authBadge = document.getElementById("authBadge");
           if (authBadge) {
             const isClerk = data.provider === "clerk";

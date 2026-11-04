@@ -125,7 +125,12 @@ def _resolve_endpoint_and_headers(cfg: VaultConfig) -> tuple[str, dict[str, str]
     url = get_provider_endpoint(cfg.provider, cfg.base_url)
     api_key = ""
     if cfg.encrypted_api_key:
-        api_key = decrypt_secret(cfg.encrypted_api_key) or "ollama"
+        try:
+            api_key = (decrypt_secret(cfg.encrypted_api_key) or "").strip()
+        except Exception:
+            api_key = ""
+    if not api_key:
+        api_key = "ollama" if str(cfg.provider).lower() == "ollama" else "missing-api-key"
 
     headers = {
         "Content-Type": "application/json",
@@ -165,7 +170,7 @@ def extract_json_payload(content: str) -> dict[str, Any]:
         }
 
 
-FALLBACK_TRIGGER_STATUS_CODES = {401, 402, 403, 404, 429, 500, 502, 503, 529}
+FALLBACK_TRIGGER_STATUS_CODES = {400, 401, 402, 403, 404, 429, 500, 502, 503, 529}
 
 
 def sanitize_failure_reason(status_code: int | None, exc: Exception | None = None) -> str:
@@ -176,6 +181,8 @@ def sanitize_failure_reason(status_code: int | None, exc: Exception | None = Non
         return "Daily free quota exhausted (402)"
     elif status_code == 401:
         return "Authentication failed (401)"
+    elif status_code == 400:
+        return "Authentication or request rejected (400)"
     elif status_code == 403:
         return "Access forbidden (403)"
     elif status_code == 404:
@@ -231,7 +238,12 @@ def _resolve_candidate_endpoint_and_headers(candidate: dict[str, Any]) -> tuple[
     api_key = ""
     enc_key = candidate.get("encrypted_api_key")
     if enc_key:
-        api_key = decrypt_secret(enc_key) or "ollama"
+        try:
+            api_key = (decrypt_secret(enc_key) or "").strip()
+        except Exception:
+            api_key = ""
+    if not api_key:
+        api_key = "ollama" if str(candidate.get("provider", "")).lower() == "ollama" else "missing-api-key"
 
     headers = {
         "Content-Type": "application/json",
@@ -393,6 +405,15 @@ async def run_pr_review(
 
     try:
         for idx, cand in enumerate(candidates):
+            has_next = (idx + 1) < len(candidates)
+            if has_next and not cand.get("encrypted_api_key") and str(cand.get("provider", "")).lower() != "ollama":
+                if cand.get("is_primary"):
+                    sanitized_primary_reason = "Primary API key not configured"
+                logger.warning(
+                    "Provider candidate '%s' (%s - %s) has no API key configured. Failing over to next candidate...",
+                    cand["name"], cand["provider"], cand["model"]
+                )
+                continue
             url, headers = _resolve_candidate_endpoint_and_headers(cand)
             payload = {
                 "model": cand["model"],
@@ -402,7 +423,6 @@ async def run_pr_review(
                     {"role": "user", "content": user_prompt},
                 ],
             }
-            has_next = (idx + 1) < len(candidates)
             try:
                 resp = await client.post(url, headers=headers, json=payload)
                 if resp.is_error:
@@ -475,12 +495,12 @@ async def run_pr_review(
 
             except Exception as exc:
                 last_exc = exc
-                if isinstance(exc, (httpx.TimeoutException, httpx.ConnectError, httpx.NetworkError)) and has_next:
+                if isinstance(exc, (httpx.TimeoutException, httpx.ConnectError, httpx.NetworkError, httpx.HTTPError, ValueError)) and has_next:
                     reason = sanitize_failure_reason(None, exc)
                     if cand.get("is_primary"):
                         sanitized_primary_reason = reason
                     logger.warning(
-                        "Provider candidate '%s' (%s - %s) encountered network error: %s. Failing over...",
+                        "Provider candidate '%s' (%s - %s) encountered error: %s. Failing over...",
                         cand["name"], cand["provider"], cand["model"], reason
                     )
                     continue
@@ -542,6 +562,13 @@ async def run_interactive_command(
     last_exc: Exception | None = None
     try:
         for idx, cand in enumerate(candidates):
+            has_next = (idx + 1) < len(candidates)
+            if has_next and not cand.get("encrypted_api_key") and str(cand.get("provider", "")).lower() != "ollama":
+                logger.warning(
+                    "Interactive candidate '%s' has no API key configured. Failing over...",
+                    cand["name"]
+                )
+                continue
             url, headers = _resolve_candidate_endpoint_and_headers(cand)
             payload = {
                 "model": cand["model"],
@@ -551,7 +578,6 @@ async def run_interactive_command(
                     {"role": "user", "content": "\n\n".join(context_parts)},
                 ],
             }
-            has_next = (idx + 1) < len(candidates)
             try:
                 resp = await client.post(url, headers=headers, json=payload)
                 if resp.is_error:
@@ -567,10 +593,10 @@ async def run_interactive_command(
                 return resp.json()["choices"][0]["message"]["content"]
             except Exception as exc:
                 last_exc = exc
-                if isinstance(exc, (httpx.TimeoutException, httpx.ConnectError, httpx.NetworkError)) and has_next:
+                if isinstance(exc, (httpx.TimeoutException, httpx.ConnectError, httpx.NetworkError, httpx.HTTPError, ValueError)) and has_next:
                     reason = sanitize_failure_reason(None, exc)
                     logger.warning(
-                        "Interactive candidate '%s' network error: %s. Failing over...",
+                        "Interactive candidate '%s' error: %s. Failing over...",
                         cand["name"], reason
                     )
                     continue
