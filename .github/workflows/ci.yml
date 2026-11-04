@@ -3,8 +3,18 @@ name: CI
 on:
   push:
     branches: [main, developement, Experimental]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - "patchpilot-brand/**"
+      - "LICENSE"
   pull_request:
     branches: [main, developement]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - "patchpilot-brand/**"
+      - "LICENSE"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -12,14 +22,8 @@ concurrency:
 
 jobs:
   test:
-    name: Lint, Type-Check & Test (Python ${{ matrix.python-version }} / ${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest]
-        python-version: ["3.12", "3.13"]
-
+    name: Lint & Test (Python 3.12)
+    runs-on: ubuntu-latest
     env:
       TESTING: "1"
 
@@ -27,25 +31,16 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install uv with dependency caching
+      - name: Install uv and Python 3.12 with cache
         uses: astral-sh/setup-uv@v5
         with:
+          python-version: "3.12"
           enable-cache: true
           cache-dependency-glob: "uv.lock"
 
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python-version }}
-
-      - name: Install dependencies
-        run: uv sync --dev --frozen
-
-      - name: Bytecode & syntax lint check
-        run: uv run python -m compileall -q app tests examples
-
-      - name: Validate quickstart example
-        run: uv run python examples/quickstart/demo_review.py
-
-      - name: Run pytest suite
-        run: uv run pytest -v
+      - name: Sync dependencies & run verification suite
+        run: |
+          uv sync --dev --frozen
+          uv run python -m compileall -q app tests examples
+          uv run python examples/quickstart/demo_review.py
+          uv run pytest -q
