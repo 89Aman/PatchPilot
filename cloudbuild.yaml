@@ -1,27 +1,29 @@
 steps:
-  # 1. Build Docker container image
+  # 1. Build Docker container image using BuildKit inline layer caching
   - name: "gcr.io/cloud-builders/docker"
+    env:
+      - "DOCKER_BUILDKIT=1"
     args:
       - "build"
+      - "--build-arg"
+      - "BUILDKIT_INLINE_CACHE=1"
+      - "--cache-from"
+      - "gcr.io/$PROJECT_ID/${_SERVICE_NAME}:latest"
       - "-t"
       - "gcr.io/$PROJECT_ID/${_SERVICE_NAME}:$COMMIT_SHA"
       - "-t"
       - "gcr.io/$PROJECT_ID/${_SERVICE_NAME}:latest"
       - "."
 
-  # 2. Push images to Container Registry
+  # 2. Push all tags in a single pass to Container Registry
   - name: "gcr.io/cloud-builders/docker"
     args:
       - "push"
-      - "gcr.io/$PROJECT_ID/${_SERVICE_NAME}:$COMMIT_SHA"
+      - "--all-tags"
+      - "gcr.io/$PROJECT_ID/${_SERVICE_NAME}"
 
-  - name: "gcr.io/cloud-builders/docker"
-    args:
-      - "push"
-      - "gcr.io/$PROJECT_ID/${_SERVICE_NAME}:latest"
-
-  # 3. Deploy new revision to Cloud Run
-  - name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
+  # 3. Deploy new revision to Cloud Run using the lightweight :slim SDK image
+  - name: "gcr.io/google.com/cloudsdktool/cloud-sdk:slim"
     entrypoint: gcloud
     args:
       - "run"
@@ -36,10 +38,6 @@ steps:
       - "--allow-unauthenticated"
       - "--port"
       - "8080"
-
-images:
-  - "gcr.io/$PROJECT_ID/${_SERVICE_NAME}:$COMMIT_SHA"
-  - "gcr.io/$PROJECT_ID/${_SERVICE_NAME}:latest"
 
 substitutions:
   _SERVICE_NAME: "patchpilot"
