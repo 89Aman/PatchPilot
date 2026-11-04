@@ -22,7 +22,7 @@ concurrency:
 
 jobs:
   test:
-    name: Lint & Test (Python 3.12)
+    name: test
     runs-on: ubuntu-latest
     env:
       TESTING: "1"
