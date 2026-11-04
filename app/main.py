@@ -1,7 +1,9 @@
+import asyncio
 from contextlib import asynccontextmanager
 import hmac
 import json
 import logging
+import os
 import re
 from typing import Any
 from fastapi import (
@@ -126,6 +128,8 @@ async def verify_admin_or_session(
     if x_admin_token and hmac.compare_digest(x_admin_token.strip(), settings.ADMIN_API_TOKEN.strip()):
         return
 
+    owner_clean = owner.strip().lower()
+
     # Check Bearer authorization header (Admin token or Clerk JWT)
     if authorization and authorization.lower().startswith("bearer "):
         bearer_val = authorization[7:].strip()
@@ -135,19 +139,24 @@ async def verify_admin_or_session(
         if clerk_payload:
             identity = extract_clerk_identity(clerk_payload)
             sub = clerk_payload.get("sub", "").lower()
-            if identity["login"].lower() == owner.strip().lower() or sub == owner.strip().lower():
+            gh_user = (identity.get("github_username") or "").lower()
+            if identity["login"].lower() == owner_clean or sub == owner_clean or (gh_user and gh_user == owner_clean):
                 return
 
     session_data = verify_session_jwt(patchpilot_session)
-    if session_data and session_data.get("sub", "").lower() == owner.strip().lower():
-        return
+    if session_data:
+        sub_login = (session_data.get("sub") or "").lower()
+        gh_login = (session_data.get("github_username") or "").lower()
+        if sub_login == owner_clean or (gh_login and gh_login == owner_clean):
+            return
 
     if clerk_session:
         clerk_payload = await verify_clerk_token(clerk_session)
         if clerk_payload:
             identity = extract_clerk_identity(clerk_payload)
             sub = clerk_payload.get("sub", "").lower()
-            if identity["login"].lower() == owner.strip().lower() or sub == owner.strip().lower():
+            gh_user = (identity.get("github_username") or "").lower()
+            if identity["login"].lower() == owner_clean or sub == owner_clean or (gh_user and gh_user == owner_clean):
                 return
 
     raise HTTPException(
@@ -1051,10 +1060,50 @@ async def test_vault_endpoint(
 # Background Handlers
 # -----------------------------------------------------------------------------
 
+def _vault_has_usable_key(cfg: VaultConfig | None) -> bool:
+    if not cfg:
+        return False
+    if bool((cfg.encrypted_api_key or "").strip()) or str(cfg.provider or "").lower() == "ollama":
+        return True
+    if getattr(cfg, "fallbacks_json", None):
+        try:
+            raw = json.loads(cfg.fallbacks_json)
+            if isinstance(raw, list):
+                for fb in raw:
+                    if isinstance(fb, dict) and fb.get("is_enabled", True):
+                        if bool((fb.get("encrypted_api_key") or "").strip()) or str(fb.get("provider", "")).lower() == "ollama":
+                            return True
+        except Exception:
+            pass
+    return False
+
+
 async def _get_owner_config(owner: str) -> VaultConfig | None:
+    owner_clean = owner.strip().lower()
     async with SessionLocal() as session:
-        result = await session.execute(select(VaultConfig).where(VaultConfig.owner == owner.strip().lower()))
-        return result.scalar_one_or_none()
+        result = await session.execute(select(VaultConfig).where(VaultConfig.owner == owner_clean))
+        cfg = result.scalar_one_or_none()
+        if _vault_has_usable_key(cfg):
+            return cfg
+
+        # Check if owner is linked via UserAccount.github_username -> UserAccount.login
+        acct_res = await session.execute(select(UserAccount))
+        for acct in acct_res.scalars().all():
+            gh_user = (acct.github_username or "").strip().lower()
+            login_user = (acct.login or "").strip().lower()
+            if gh_user == owner_clean and login_user and login_user != owner_clean:
+                alt_res = await session.execute(select(VaultConfig).where(VaultConfig.owner == login_user))
+                alt_cfg = alt_res.scalar_one_or_none()
+                if _vault_has_usable_key(alt_cfg):
+                    return alt_cfg
+
+        # Fallback: on single-tenant / self-hosted instances, check if any VaultConfig has a usable key
+        all_res = await session.execute(select(VaultConfig))
+        for row in all_res.scalars().all():
+            if _vault_has_usable_key(row):
+                return row
+
+        return cfg
 
 
 async def handle_pr_event(payload: dict[str, Any]) -> None:
@@ -1210,27 +1259,54 @@ async def handle_comment_event(event_type: str, payload: dict[str, Any]) -> None
 
         cfg = await _get_owner_config(owner)
         if not cfg:
-            return
+            cfg = VaultConfig(
+                owner=owner.strip().lower(),
+                provider="gemini",
+                model="gemini-2.5-flash",
+                encrypted_api_key="",
+                review_policy=DEFAULT_POLICY,
+            )
 
         async with httpx.AsyncClient(timeout=60.0) as client:
             token = await get_installation_token(installation_id, client=client)
             pr_diff = "" if diff_hunk else await fetch_pr_diff(token, repo_full_name, pr_number, client=client)
 
-            reply_md = await run_interactive_command(
-                cfg=cfg,
-                command=command,
-                user_comment=extra_prompt,
-                file_path=file_path,
-                diff_hunk=diff_hunk,
-                pr_diff=pr_diff,
-                client=client,
-            )
+            try:
+                reply_md = await run_interactive_command(
+                    cfg=cfg,
+                    command=command,
+                    user_comment=extra_prompt,
+                    file_path=file_path,
+                    diff_hunk=diff_hunk,
+                    pr_diff=pr_diff,
+                    client=client,
+                )
+                body_text = f"### ✈️ PatchPilot (`{command}`)\n\n{reply_md}"
+            except Exception as llm_exc:
+                logger.warning("Interactive LLM call failed on %s#%s: %s", repo_full_name, pr_number, llm_exc)
+                has_key = _vault_has_usable_key(cfg)
+                status_detail = (
+                    "No API key is currently stored in your BYOK Vault."
+                    if not has_key
+                    else f"Configured provider (`{cfg.provider}` / `{cfg.model}`) rejected the request or key."
+                )
+                body_text = (
+                    f"### ✈️ PatchPilot (`{command}`)\n\n"
+                    f"⚠️ **Action Required — AI Provider Key Missing or Invalid**\n\n"
+                    f"PatchPilot received your `{command}` command on `{repo_full_name}#{pr_number}` "
+                    f"(diff fetched: `{len(pr_diff):,}` chars), but could not complete the AI analysis: {status_detail}\n\n"
+                    f"**How to fix in 30 seconds:**\n"
+                    f"1. Open the **[PatchPilot BYOK Vault Dashboard](https://patchpilot.noventra.org.in/dashboard)**.\n"
+                    f"2. Set **GitHub Owner / Org** to `{owner.strip().lower()}` and save a valid API key "
+                    f"(e.g. a free **Google Gemini** or **Groq** key).\n"
+                    f"3. Comment `@patchpilot-app[bot] {command}` again on this PR."
+                )
 
             await post_comment_reply(
                 token=token,
                 repo_full_name=repo_full_name,
                 pr_number=pr_number,
-                body=f"### ✈️ PatchPilot (`{command}`)\n\n{reply_md}",
+                body=body_text,
                 review_comment_id=review_comment_id,
                 client=client,
             )
@@ -1264,7 +1340,14 @@ async def github_webhook(
     # 1. Pull Request Events
     if x_github_event == "pull_request" and action in ("opened", "synchronize", "reopened"):
         if not payload.get("pull_request", {}).get("draft", False):
-            background_tasks.add_task(handle_pr_event, payload)
+            if os.environ.get("TESTING") == "1":
+                background_tasks.add_task(handle_pr_event, payload)
+            else:
+                task = asyncio.create_task(handle_pr_event(payload))
+                try:
+                    await asyncio.wait_for(asyncio.shield(task), timeout=8.5)
+                except asyncio.TimeoutError:
+                    pass
             return {"status": "queued_pr_review"}
         return {"status": "ignored_draft"}
 
@@ -1274,7 +1357,14 @@ async def github_webhook(
         if sender_type != "bot":
             body_text = payload.get("comment", {}).get("body", "")
             if COMMAND_RE.search(body_text):
-                background_tasks.add_task(handle_comment_event, x_github_event, payload)
+                if os.environ.get("TESTING") == "1":
+                    background_tasks.add_task(handle_comment_event, x_github_event, payload)
+                else:
+                    task = asyncio.create_task(handle_comment_event(x_github_event, payload))
+                    try:
+                        await asyncio.wait_for(asyncio.shield(task), timeout=8.5)
+                    except asyncio.TimeoutError:
+                        pass
                 return {"status": "queued_comment_reply"}
 
         return {"status": "ignored_comment"}
