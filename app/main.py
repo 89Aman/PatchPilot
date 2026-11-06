@@ -29,7 +29,11 @@ from app.config import settings
 from app.crypto import decrypt_secret, encrypt_secret
 from app.db import DEFAULT_POLICY, Base, SessionLocal, UserAccount, VaultConfig, engine, get_db, init_db
 from app.github_auth import (
+    add_comment_reaction,
     apply_pr_labels,
+    build_loading_review_card,
+    complete_check_indicator,
+    create_pending_pr_review,
     create_session_jwt,
     exchange_oauth_code,
     fetch_pr_diff,
@@ -40,7 +44,9 @@ from app.github_auth import (
     get_oauth_authorize_url,
     post_comment_reply,
     publish_pr_review,
+    start_check_indicator,
     strip_emojis,
+    update_pr_review_card,
     verify_session_jwt,
     verify_webhook_signature,
 )
@@ -1150,12 +1156,59 @@ async def handle_pr_event(payload: dict[str, Any]) -> None:
             logger.warning("No vault configuration found for %s. Skipping review.", owner)
             return
 
+        pr_author = pr.get("user", {}).get("login") or owner
+
         async with httpx.AsyncClient(timeout=60.0) as client:
             token = await get_installation_token(installation_id, client=client)
+
+            # Immediately register PatchPilot in Reviewers sidebar and post live loading card
+            loading_card = build_loading_review_card(
+                requested_by=pr_author,
+                commit_sha=head_sha,
+                command="review",
+                target_ref=f"{repo_full_name}#{pr_number}",
+            )
+            pending_review = await create_pending_pr_review(
+                token,
+                repo_full_name,
+                pr_number,
+                head_sha,
+                loading_card,
+                client=client,
+            )
+            check_handle = await start_check_indicator(
+                token,
+                repo_full_name,
+                head_sha,
+                command="review",
+                client=client,
+            )
+
             raw_diff = await fetch_pr_diff(token, repo_full_name, pr_number, client=client)
             annotated_diff, valid_lines = annotate_diff(raw_diff)
 
             if not annotated_diff.strip():
+                empty_msg = strip_emojis(
+                    f"## PatchPilot AI PR Review\n\n"
+                    f"**Requested by:** @{pr_author} &nbsp;|&nbsp; **Status:** `Skipped (No reviewable code changes)`\n\n"
+                    f"Only lockfiles, binary assets, or empty diffs were detected in `{repo_full_name}#{pr_number}`."
+                )
+                await update_pr_review_card(
+                    token,
+                    repo_full_name,
+                    pr_number,
+                    pending_review,
+                    empty_msg,
+                    client=client,
+                )
+                await complete_check_indicator(
+                    token,
+                    repo_full_name,
+                    check_handle,
+                    verdict="PASS",
+                    summary_text="Skipped: no reviewable source changes.",
+                    client=client,
+                )
                 return
 
             # 1. Pre-LLM Secret Detection (PatchPilot Secure)
@@ -1173,6 +1226,29 @@ async def handle_pr_event(payload: dict[str, Any]) -> None:
 
             # 3. Apply GitHub Triage & Security Labels asynchronously
             await apply_pr_labels(token, repo_full_name, pr_number, triage.labels, client=client)
+
+            # Update loading card stages before 2-pass LLM analysis
+            mid_loading_card = build_loading_review_card(
+                requested_by=pr_author,
+                commit_sha=head_sha,
+                command="review",
+                target_ref=f"{repo_full_name}#{pr_number}",
+                stage_statuses={
+                    "diff": f"COMPLETED ({len(files_list)} files)",
+                    "security": "COMPLETED (Clean)" if secret_count == 0 else f"ALERT ({secret_count} found)",
+                    "triage": f"COMPLETED ({triage.size_tier}, {triage.risk_level})",
+                    "pass1": "RUNNING...",
+                    "pass2": "RUNNING...",
+                },
+            )
+            await update_pr_review_card(
+                token,
+                repo_full_name,
+                pr_number,
+                pending_review,
+                mid_loading_card,
+                client=client,
+            )
 
             # 4. Sanitize diff before LLM processing if secrets were detected
             clean_annotated_diff = sanitize_diff_text(annotated_diff, secret_findings) if secret_count > 0 else annotated_diff
@@ -1211,9 +1287,7 @@ async def handle_pr_event(payload: dict[str, Any]) -> None:
                     })
                 review_data["verdict"] = "BLOCK"
 
-            pr_author = pr.get("user", {}).get("login") or owner
-
-            # 6. Publish native GitHub review with triage summary & security badges
+            # 6. Publish native GitHub review in-place & complete check indicator
             await publish_pr_review(
                 token,
                 repo_full_name,
@@ -1225,6 +1299,15 @@ async def handle_pr_event(payload: dict[str, Any]) -> None:
                 triage_summary=triage.summary_text,
                 secret_alerts_count=secret_count,
                 requested_by=pr_author,
+                existing_review=pending_review,
+            )
+            await complete_check_indicator(
+                token,
+                repo_full_name,
+                check_handle,
+                verdict=str(review_data.get("verdict", "PASS")),
+                summary_text=str(review_data.get("summary", "PatchPilot verification completed.")),
+                client=client,
             )
             logger.info("Published review and triage for %s#%s (size: %s, risk: %s)", repo_full_name, pr_number, triage.size_tier, triage.risk_level)
     except Exception as exc:
@@ -1277,18 +1360,59 @@ async def handle_comment_event(event_type: str, payload: dict[str, Any]) -> None
 
         async with httpx.AsyncClient(timeout=90.0) as client:
             token = await get_installation_token(installation_id, client=client)
+
+            # 1. Immediately add 'eyes' reaction to the triggering comment
+            comment_id = comment.get("id")
+            if comment_id:
+                await add_comment_reaction(
+                    token=token,
+                    repo_full_name=repo_full_name,
+                    comment_id=int(comment_id),
+                    reaction="eyes",
+                    is_review_comment=(event_type == "pull_request_review_comment"),
+                    client=client,
+                )
+
+            # 2. For top-level PR comments, fetch PR metadata and immediately register PatchPilot as Reviewer with a live loading card
+            pr_meta: dict[str, Any] = {}
+            head_sha = ""
+            pending_review: dict[str, Any] | None = None
+            check_handle: dict[str, Any] | None = None
+
+            if event_type == "issue_comment" and not diff_hunk:
+                try:
+                    pr_meta = await fetch_pr_metadata(token, repo_full_name, pr_number, client=client)
+                    head_sha = pr_meta.get("head", {}).get("sha", "")
+                except Exception as meta_exc:
+                    logger.warning("Could not fetch PR metadata for %s#%s: %s", repo_full_name, pr_number, meta_exc)
+
+                loading_card = build_loading_review_card(
+                    requested_by=comment_user,
+                    commit_sha=head_sha,
+                    command=command,
+                    target_ref=f"{repo_full_name}#{pr_number}",
+                )
+                pending_review = await create_pending_pr_review(
+                    token=token,
+                    repo_full_name=repo_full_name,
+                    pr_number=pr_number,
+                    head_sha=head_sha,
+                    body=loading_card,
+                    client=client,
+                )
+                check_handle = await start_check_indicator(
+                    token=token,
+                    repo_full_name=repo_full_name,
+                    head_sha=head_sha,
+                    command=command,
+                    client=client,
+                )
+
             pr_diff = "" if diff_hunk else await fetch_pr_diff(token, repo_full_name, pr_number, client=client)
 
             try:
                 # Full structured PatchPilot PR review when triggered via top-level 'review' command
                 if event_type == "issue_comment" and command == "review" and not diff_hunk:
-                    pr_meta: dict[str, Any] = {}
-                    try:
-                        pr_meta = await fetch_pr_metadata(token, repo_full_name, pr_number, client=client)
-                    except Exception as meta_exc:
-                        logger.warning("Could not fetch PR metadata for %s#%s: %s", repo_full_name, pr_number, meta_exc)
-
-                    head_sha = pr_meta.get("head", {}).get("sha", "")
                     pr_title = pr_meta.get("title") or payload.get("issue", {}).get("title", f"Pull Request #{pr_number}")
                     pr_body = pr_meta.get("body") or payload.get("issue", {}).get("body") or ""
                     additions = pr_meta.get("additions") or sum(
@@ -1310,6 +1434,29 @@ async def handle_comment_event(event_type: str, payload: dict[str, Any]) -> None
                         has_secret_findings=secret_count > 0,
                     )
                     await apply_pr_labels(token, repo_full_name, pr_number, triage.labels, client=client)
+
+                    # Update live loading card stages before 2-pass LLM verification
+                    mid_loading_card = build_loading_review_card(
+                        requested_by=comment_user,
+                        commit_sha=head_sha,
+                        command="review",
+                        target_ref=f"{repo_full_name}#{pr_number}",
+                        stage_statuses={
+                            "diff": f"COMPLETED ({len(files_list)} files)",
+                            "security": "COMPLETED (Clean)" if secret_count == 0 else f"ALERT ({secret_count} found)",
+                            "triage": f"COMPLETED ({triage.size_tier}, {triage.risk_level})",
+                            "pass1": "RUNNING...",
+                            "pass2": "RUNNING...",
+                        },
+                    )
+                    await update_pr_review_card(
+                        token=token,
+                        repo_full_name=repo_full_name,
+                        pr_number=pr_number,
+                        handle=pending_review,
+                        body=mid_loading_card,
+                        client=client,
+                    )
 
                     clean_annotated_diff = (
                         sanitize_diff_text(annotated_diff, secret_findings) if secret_count > 0 else annotated_diff
@@ -1357,6 +1504,15 @@ async def handle_comment_event(event_type: str, payload: dict[str, Any]) -> None
                         triage_summary=triage.summary_text,
                         secret_alerts_count=secret_count,
                         requested_by=comment_user,
+                        existing_review=pending_review,
+                    )
+                    await complete_check_indicator(
+                        token=token,
+                        repo_full_name=repo_full_name,
+                        check_handle=check_handle,
+                        verdict=str(review_data.get("verdict", "PASS")),
+                        summary_text=str(review_data.get("summary", "PatchPilot verification completed.")),
+                        client=client,
                     )
                     logger.info("Published full verified PR review for @%s on %s#%s", comment_user, repo_full_name, pr_number)
                     return
@@ -1400,15 +1556,47 @@ async def handle_comment_event(event_type: str, payload: dict[str, Any]) -> None
                     f"(e.g. a free **Google Gemini** or **Groq** key).\n"
                     f"3. Comment `@patchpilot-app[bot] {command}` again on this PR."
                 )
+                if check_handle:
+                    await complete_check_indicator(
+                        token=token,
+                        repo_full_name=repo_full_name,
+                        check_handle=check_handle,
+                        verdict="WARN",
+                        summary_text="Action Required: Configure or verify BYOK Vault API key.",
+                        client=client,
+                    )
+                    check_handle = None
 
-            await post_comment_reply(
-                token=token,
-                repo_full_name=repo_full_name,
-                pr_number=pr_number,
-                body=body_text,
-                review_comment_id=review_comment_id,
-                client=client,
-            )
+            if check_handle:
+                await complete_check_indicator(
+                    token=token,
+                    repo_full_name=repo_full_name,
+                    check_handle=check_handle,
+                    verdict="PASS",
+                    summary_text=f"Completed PatchPilot `{command}` command.",
+                    client=client,
+                )
+
+            updated_in_place = False
+            if pending_review and not review_comment_id:
+                updated_in_place = await update_pr_review_card(
+                    token=token,
+                    repo_full_name=repo_full_name,
+                    pr_number=pr_number,
+                    handle=pending_review,
+                    body=body_text,
+                    client=client,
+                )
+
+            if not updated_in_place:
+                await post_comment_reply(
+                    token=token,
+                    repo_full_name=repo_full_name,
+                    pr_number=pr_number,
+                    body=body_text,
+                    review_comment_id=review_comment_id,
+                    client=client,
+                )
             logger.info("Replied to %s command on %s#%s", command, repo_full_name, pr_number)
     except Exception as exc:
         logger.exception("Failed processing interactive comment: %s", exc)

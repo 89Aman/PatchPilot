@@ -179,6 +179,329 @@ async def get_pr_diff(
     return await fetch_pr_diff(installation_token, repo_full_name, pr_number, client=client)
 
 
+async def add_comment_reaction(
+    token: str,
+    repo_full_name: str,
+    comment_id: int | str,
+    reaction: str = "eyes",
+    is_review_comment: bool = False,
+    client: httpx.AsyncClient | None = None,
+) -> bool:
+    """Add an immediate reaction (e.g. 'eyes') to acknowledge a user's command comment."""
+    if not comment_id:
+        return False
+
+    close_client = False
+    if client is None:
+        client = httpx.AsyncClient(timeout=15.0)
+        close_client = True
+
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    endpoint = (
+        f"https://api.github.com/repos/{repo_full_name}/pulls/comments/{comment_id}/reactions"
+        if is_review_comment
+        else f"https://api.github.com/repos/{repo_full_name}/issues/comments/{comment_id}/reactions"
+    )
+    try:
+        resp = await client.post(endpoint, headers=headers, json={"content": reaction})
+        return resp.status_code in (200, 201)
+    except Exception as exc:
+        logger.debug("Could not add comment reaction on %s: %s", repo_full_name, exc)
+        return False
+    finally:
+        if close_client:
+            await client.aclose()
+
+
+def build_loading_review_card(
+    requested_by: str | None = None,
+    commit_sha: str | None = None,
+    command: str = "review",
+    stage_statuses: dict[str, str] | None = None,
+    target_ref: str | None = None,
+) -> str:
+    """Build an emoji-free, GitHub Actions-style live progress card shown while PatchPilot executes checks."""
+    sha_short = (commit_sha or "HEAD")[:7]
+    cmd_clean = strip_emojis(command).strip() or "review"
+
+    meta_parts: list[str] = []
+    if requested_by and requested_by.strip():
+        clean_user = requested_by.strip().lstrip("@")
+        meta_parts.append(f"**Requested by:** @{clean_user}")
+    if target_ref and target_ref.strip():
+        meta_parts.append(f"**Target:** `{target_ref.strip()}`")
+    meta_parts.append("**Status:** `IN PROGRESS`")
+    meta_parts.append(f"**Command:** `{cmd_clean}`")
+    meta_parts.append(f"**Commit:** `{sha_short}`")
+    meta_line = " &nbsp;|&nbsp; ".join(meta_parts)
+
+    defaults = {
+        "diff": "RUNNING...",
+        "security": "QUEUED",
+        "triage": "QUEUED",
+        "pass1": "QUEUED",
+        "pass2": "QUEUED",
+    }
+    if stage_statuses:
+        defaults.update(stage_statuses)
+
+    pipeline_rows = [
+        f"| **1. Diff Ingestion** | Fetching unified diff and filtering lockfiles | `{defaults['diff']}` |",
+        f"| **2. Security Gate** | Pre-LLM scan for exposed credentials and API keys | `{defaults['security']}` |",
+        f"| **3. PR Triage** | Computing size tier, blast radius, and risk score | `{defaults['triage']}` |",
+        f"| **4. Pass 1 Analysis** | Auditing architecture, state transitions, and edge cases | `{defaults['pass1']}` |",
+        f"| **5. Pass 2 Verification** | Fact-checking candidate findings against ground-truth diff | `{defaults['pass2']}` |",
+    ]
+
+    card = (
+        "<!-- patchpilot-ai-review -->\n"
+        "## PatchPilot AI PR Review\n\n"
+        f"{meta_line}\n\n"
+        "> **PatchPilot Engine is actively analyzing this pull request.**\n"
+        "> `patchpilot-app[bot]` has been registered as a reviewer. This card will automatically update in-place with the final report once all security and verification checks complete.\n\n"
+        "### Live Verification Pipeline\n\n"
+        "| Stage | Check Description | Status |\n"
+        "| :--- | :--- | :--- |\n"
+        + "\n".join(pipeline_rows)
+        + "\n"
+    )
+    return strip_emojis(card)
+
+
+async def create_pending_pr_review(
+    token: str,
+    repo_full_name: str,
+    pr_number: int,
+    head_sha: str | None,
+    body: str,
+    client: httpx.AsyncClient | None = None,
+) -> dict[str, Any] | None:
+    """Immediately submit a COMMENT review so PatchPilot appears in the PR Reviewers sidebar and displays the loading screen."""
+    close_client = False
+    if client is None:
+        client = httpx.AsyncClient(timeout=20.0)
+        close_client = True
+
+    clean_body = strip_emojis(body)
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    review_url = f"https://api.github.com/repos/{repo_full_name}/pulls/{pr_number}/reviews"
+    payload: dict[str, Any] = {
+        "body": clean_body,
+        "event": "COMMENT",
+    }
+    if head_sha:
+        payload["commit_id"] = head_sha
+
+    try:
+        resp = await client.post(review_url, headers=headers, json=payload)
+        if resp.status_code in (200, 201):
+            data = resp.json()
+            rev_id = data.get("id")
+            if rev_id:
+                return {"kind": "review", "id": rev_id}
+
+        # Fallback to issue comment (e.g. if PR is closed/merged or review creation returned 422)
+        comment_url = f"https://api.github.com/repos/{repo_full_name}/issues/{pr_number}/comments"
+        c_resp = await client.post(comment_url, headers=headers, json={"body": clean_body})
+        if c_resp.status_code in (200, 201):
+            c_data = c_resp.json()
+            c_id = c_data.get("id")
+            if c_id:
+                return {"kind": "comment", "id": c_id}
+    except Exception as exc:
+        logger.warning("Could not create initial loading review card on %s#%s: %s", repo_full_name, pr_number, exc)
+    finally:
+        if close_client:
+            await client.aclose()
+    return None
+
+
+async def update_pr_review_card(
+    token: str,
+    repo_full_name: str,
+    pr_number: int,
+    handle: dict[str, Any] | None,
+    body: str,
+    client: httpx.AsyncClient | None = None,
+) -> bool:
+    """Update an existing Pull Request Review or Issue Comment in-place with updated stage progress or final results."""
+    if not handle or not handle.get("id"):
+        return False
+
+    close_client = False
+    if client is None:
+        client = httpx.AsyncClient(timeout=20.0)
+        close_client = True
+
+    clean_body = strip_emojis(body)
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    item_id = handle["id"]
+    kind = handle.get("kind", "review")
+
+    try:
+        if kind == "review":
+            url = f"https://api.github.com/repos/{repo_full_name}/pulls/{pr_number}/reviews/{item_id}"
+            resp = await client.put(url, headers=headers, json={"body": clean_body})
+        else:
+            url = f"https://api.github.com/repos/{repo_full_name}/issues/comments/{item_id}"
+            resp = await client.patch(url, headers=headers, json={"body": clean_body})
+        return resp.status_code in (200, 201)
+    except Exception as exc:
+        logger.warning("Failed updating review card in-place on %s#%s: %s", repo_full_name, pr_number, exc)
+        return False
+    finally:
+        if close_client:
+            await client.aclose()
+
+
+async def start_check_indicator(
+    token: str,
+    repo_full_name: str,
+    head_sha: str | None,
+    command: str = "review",
+    client: httpx.AsyncClient | None = None,
+) -> dict[str, Any]:
+    """Start a native GitHub Check Run and/or Commit Status ('pending') so a GitHub Actions-style spinner is visible on the PR."""
+    if not head_sha:
+        return {}
+
+    close_client = False
+    if client is None:
+        client = httpx.AsyncClient(timeout=15.0)
+        close_client = True
+
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    handle: dict[str, Any] = {"head_sha": head_sha}
+
+    try:
+        # 1. Try Check Runs API
+        check_url = f"https://api.github.com/repos/{repo_full_name}/check-runs"
+        check_payload = {
+            "name": f"PatchPilot / {command.upper()}",
+            "head_sha": head_sha,
+            "status": "in_progress",
+            "started_at": datetime.now(timezone.utc).isoformat(),
+            "output": {
+                "title": "Running security scan, PR triage, and 2-pass verification...",
+                "summary": "PatchPilot is analyzing the pull request diff and fact-checking candidate findings.",
+            },
+        }
+        c_resp = await client.post(check_url, headers=headers, json=check_payload)
+        if c_resp.status_code in (200, 201):
+            handle["check_run_id"] = c_resp.json().get("id")
+
+        # 2. Also attempt Commit Status API (pending spinner)
+        status_url = f"https://api.github.com/repos/{repo_full_name}/statuses/{head_sha}"
+        status_payload = {
+            "state": "pending",
+            "context": "PatchPilot / Security & Code Review",
+            "description": f"Running PatchPilot {command} analysis and verification...",
+        }
+        s_resp = await client.post(status_url, headers=headers, json=status_payload)
+        if s_resp.status_code in (200, 201):
+            handle["status_active"] = True
+    except Exception as exc:
+        logger.debug("Check indicator start skipped on %s: %s", repo_full_name, exc)
+    finally:
+        if close_client:
+            await client.aclose()
+
+    return handle
+
+
+async def complete_check_indicator(
+    token: str,
+    repo_full_name: str,
+    check_handle: dict[str, Any] | None,
+    verdict: str = "PASS",
+    summary_text: str = "PatchPilot verification completed.",
+    client: httpx.AsyncClient | None = None,
+) -> None:
+    """Complete the GitHub Check Run and/or Commit Status spinner once analysis finishes."""
+    if not check_handle or not check_handle.get("head_sha"):
+        return
+
+    close_client = False
+    if client is None:
+        client = httpx.AsyncClient(timeout=15.0)
+        close_client = True
+
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    head_sha = check_handle["head_sha"]
+    verdict_upper = verdict.upper().strip()
+    conclusion = "failure" if verdict_upper == "BLOCK" else "success"
+    status_state = "failure" if verdict_upper == "BLOCK" else "success"
+    clean_title = strip_emojis(f"Verdict: {verdict_upper} — {summary_text[:110]}").strip()
+
+    try:
+        check_run_id = check_handle.get("check_run_id")
+        if check_run_id:
+            check_url = f"https://api.github.com/repos/{repo_full_name}/check-runs/{check_run_id}"
+            await client.patch(
+                check_url,
+                headers=headers,
+                json={
+                    "status": "completed",
+                    "conclusion": conclusion,
+                    "completed_at": datetime.now(timezone.utc).isoformat(),
+                    "output": {
+                        "title": clean_title[:250],
+                        "summary": strip_emojis(summary_text)[:60000],
+                    },
+                },
+            )
+
+        if check_handle.get("status_active"):
+            status_url = f"https://api.github.com/repos/{repo_full_name}/statuses/{head_sha}"
+            await client.post(
+                status_url,
+                headers=headers,
+                json={
+                    "state": status_state,
+                    "context": "PatchPilot / Security & Code Review",
+                    "description": clean_title[:135],
+                },
+            )
+    except Exception as exc:
+        logger.debug("Check indicator completion skipped on %s: %s", repo_full_name, exc)
+    finally:
+        if close_client:
+            await client.aclose()
+
+
+def _build_agent_prompt_for_finding(f: dict[str, Any]) -> str:
+    """Construct a concise, copy-ready prompt for AI coding agents to resolve a specific finding."""
+    explicit = strip_emojis(str(f.get("agent_prompt", ""))).strip()
+    if explicit:
+        return explicit
+    f_file = f.get("file", "target file")
+    f_line = f.get("line", "")
+    f_title = strip_emojis(str(f.get("title", "the reported issue"))).strip()
+    f_exp = strip_emojis(str(f.get("explanation") or f.get("comment") or "")).strip()
+    loc = f"around line {f_line}" if f_line else "in the modified section"
+    return f"In `{f_file}` {loc}, fix '{f_title}': {f_exp}"
+
+
 def build_review_summary_card(
     verdict: str,
     commit_sha: str,
@@ -197,8 +520,9 @@ def build_review_summary_card(
     requested_by: str | None = None,
     findings: list[dict[str, Any]] | None = None,
     verification_status: str | None = None,
+    architecture_diagram: str | None = None,
 ) -> str:
-    """Generate clean, emoji-free PatchPilot Markdown summary card with user mention, review checks, walkthrough, verified findings, and test stubs."""
+    """Generate clean, emoji-free CodeRabbit-grade PatchPilot Markdown summary card."""
     verdict_clean = strip_emojis(verdict).upper().strip() or "PASS"
     sha_short = commit_sha[:7] if commit_sha else "HEAD"
 
@@ -249,8 +573,17 @@ def build_review_summary_card(
             + "\n\n"
         )
 
-    # File Walkthrough Table
+    # File Walkthrough & Architecture Diagram Section
     walkthrough_section = ""
+    diagram_block = ""
+    if architecture_diagram and architecture_diagram.strip():
+        raw_diag = strip_emojis(architecture_diagram).strip()
+        if raw_diag.startswith("```"):
+            diagram_block = f"{raw_diag}\n\n"
+        else:
+            diagram_block = f"```mermaid\n{raw_diag}\n```\n\n"
+
+    wt_table = ""
     if walkthrough:
         wt_rows = [
             f"| `{item.get('file', '')}` | {strip_emojis(str(item.get('impact', 'Refactor'))).strip() or 'Refactor'} | {strip_emojis(str(item.get('summary', ''))).strip()} |"
@@ -258,15 +591,24 @@ def build_review_summary_card(
             if item.get("file")
         ]
         if wt_rows:
-            walkthrough_section = (
-                "### Changes Walkthrough\n\n"
+            wt_table = (
                 "| File | Impact | Summary |\n"
                 "| :--- | :--- | :--- |\n"
                 + "\n".join(wt_rows)
                 + "\n\n"
             )
 
-    # Verified Findings Detail Section
+    if wt_table or diagram_block:
+        walkthrough_section = (
+            "### Changes Walkthrough\n\n"
+            "<details open>\n"
+            "<summary><b>File Walkthrough &amp; Architecture Flow</b></summary>\n\n"
+            f"{diagram_block}"
+            f"{wt_table}"
+            "</details>\n\n"
+        )
+
+    # Verified Findings Detail Section with Prompt for AI Agents
     verified_findings_section = ""
     if findings:
         finding_blocks: list[str] = []
@@ -283,6 +625,13 @@ def build_review_summary_card(
             block = f"#### {idx}. [{f_sev}] `{f_file}`{line_ref} — {f_title}\n\n{f_exp}"
             if f_sug:
                 block += f"\n\n```suggestion\n{f_sug}\n```"
+            agent_prompt = _build_agent_prompt_for_finding(f)
+            block += (
+                "\n\n<details>\n"
+                "<summary><b>Prompt for AI Agents</b></summary>\n\n"
+                f"```text\n{agent_prompt}\n```\n\n"
+                "</details>"
+            )
             finding_blocks.append(block)
         if finding_blocks:
             verified_findings_section = (
@@ -352,8 +701,9 @@ async def publish_pr_review(
     triage_summary: str | None = None,
     secret_alerts_count: int = 0,
     requested_by: str | None = None,
+    existing_review: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Publish native GitHub review with emoji-free summary card, user mention, and verified inline comments."""
+    """Publish native GitHub review with emoji-free summary card, in-place loading card replacement, and verified inline comments."""
     summary = review_data.get("summary", "Review completed.")
     verdict = review_data.get("verdict", "PASS")
     findings = review_data.get("findings", [])
@@ -364,6 +714,7 @@ async def publish_pr_review(
     suggested_tests = review_data.get("suggested_tests")
     fallback_used = review_data.get("fallback_used")
     verification_status = review_data.get("verification_status")
+    architecture_diagram = review_data.get("architecture_diagram")
 
     bug_count = sum(1 for f in findings if str(f.get("severity", "")).lower() == "bug")
     risk_count = sum(1 for f in findings if str(f.get("severity", "")).lower() == "risk")
@@ -387,6 +738,7 @@ async def publish_pr_review(
         requested_by=requested_by,
         findings=findings,
         verification_status=verification_status,
+        architecture_diagram=architecture_diagram,
     )
 
     comments: list[dict[str, Any]] = []
@@ -410,12 +762,25 @@ async def publish_pr_review(
         if suggestion and str(suggestion).strip():
             comment_body += f"\n\n```suggestion\n{str(suggestion).strip()}\n```"
 
+        agent_prompt = _build_agent_prompt_for_finding(f)
+        comment_body += (
+            "\n\n<details>\n"
+            "<summary><b>Prompt for AI Agents</b></summary>\n\n"
+            f"```text\n{agent_prompt}\n```\n\n"
+            "</details>"
+        )
+
         comments.append({
             "path": file_path,
             "line": int(line),
             "side": "RIGHT",
-            "body": comment_body,
+            "body": strip_emojis(comment_body),
         })
+
+    close_client = False
+    if client is None:
+        client = httpx.AsyncClient(timeout=30.0)
+        close_client = True
 
     url = f"https://api.github.com/repos/{repo_full_name}/pulls/{pr_number}/reviews"
     headers = {
@@ -423,22 +788,40 @@ async def publish_pr_review(
         "Accept": "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
     }
-
     review_event = "APPROVE" if str(verdict).upper() in ("PASS", "APPROVE") and bug_count == 0 and secret_alerts_count == 0 else "COMMENT"
-    payload: dict[str, Any] = {
-        "commit_id": head_sha,
-        "body": summary_card,
-        "event": review_event,
-    }
-    if comments:
-        payload["comments"] = comments
-
-    close_client = False
-    if client is None:
-        client = httpx.AsyncClient(timeout=30.0)
-        close_client = True
 
     try:
+        # If we already created an initial loading review card, update it in-place with the final summary card!
+        if existing_review and existing_review.get("id"):
+            updated_ok = await update_pr_review_card(
+                token=token,
+                repo_full_name=repo_full_name,
+                pr_number=pr_number,
+                handle=existing_review,
+                body=summary_card,
+                client=client,
+            )
+            if updated_ok:
+                # If there are inline diff comments, attach them via a compact review submission
+                if comments:
+                    inline_payload: dict[str, Any] = {
+                        "body": f"PatchPilot inline review findings ({len(comments)} comment{'s' if len(comments) != 1 else ''}).",
+                        "event": "COMMENT",
+                        "comments": comments,
+                    }
+                    if head_sha:
+                        inline_payload["commit_id"] = head_sha
+                    await client.post(url, headers=headers, json=inline_payload)
+                return {"status": "updated_in_place", "id": existing_review["id"]}
+
+        payload: dict[str, Any] = {
+            "commit_id": head_sha,
+            "body": summary_card,
+            "event": review_event,
+        }
+        if comments:
+            payload["comments"] = comments
+
         response = await client.post(url, headers=headers, json=payload)
         if response.status_code == 422:
             logger.warning("GitHub 422 for review event %s. Retrying with COMMENT event for %s#%s", review_event, repo_full_name, pr_number)

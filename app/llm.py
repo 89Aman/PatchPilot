@@ -170,7 +170,6 @@ def annotate_diff(raw_diff: str, max_chars: int = 48_000) -> tuple[str, dict[str
             f_path = (file_blocks[idx][0] or "").lower()
             is_doc = f_path.endswith((".md", ".txt", ".rst"))
             effective_len = len(block_texts[idx])
-            # Cap pure markdown docs when total PR diff is huge so code files get more room
             doc_cap = max(1800, share // 2) if (is_doc and len(active_indices) > 2) else share
             if effective_len <= doc_cap:
                 allocations[idx] = effective_len
@@ -445,7 +444,7 @@ async def _verify_findings_with_llm(
         "1. Check whether the reported issue is genuinely present in the added (`+`) or modified lines of the diff.\n"
         "2. Reject any finding that claims a file or line is 'truncated' or 'incomplete' if the diff was simply excerpted.\n"
         "3. Reject speculative or hallucinated issues where the code already handles the condition properly.\n"
-        "4. Do NOT use any emojis anywhere in titles or explanations.\n"
+        "4. Do NOT use any emojis anywhere in titles, explanations, or agent_prompt.\n"
         "5. Return strictly valid JSON with schema:\n"
         "{\n"
         '  "verified_findings": [\n'
@@ -455,7 +454,8 @@ async def _verify_findings_with_llm(
         '      "severity": "bug|risk|nit",\n'
         '      "title": "Short verified title",\n'
         '      "explanation": "Fact-checked explanation of root cause and fix",\n'
-        '      "suggestion": "Optional replacement code line(s) or empty string"\n'
+        '      "suggestion": "Optional replacement code line(s) or empty string",\n'
+        '      "agent_prompt": "Concise 1-2 sentence instruction for an AI coding assistant to apply the fix"\n'
         "    }\n"
         "  ]\n"
         "}"
@@ -493,6 +493,7 @@ async def _verify_findings_with_llm(
                         "title": strip_emojis(str(vf.get("title", ""))).strip(),
                         "explanation": strip_emojis(str(vf.get("explanation", ""))).strip(),
                         "suggestion": str(vf.get("suggestion", "")),
+                        "agent_prompt": strip_emojis(str(vf.get("agent_prompt", ""))).strip(),
                     })
             return result
     except Exception as exc:
@@ -510,11 +511,11 @@ async def run_pr_review(
     valid_lines: dict[str, set[int]] | None = None,
     triage: Any | None = None,
 ) -> dict[str, Any]:
-    """Execute unified 2-pass AI review of pull request with fact-checked findings, walkthrough, and test stubs."""
+    """Execute unified 2-pass AI review of pull request with fact-checked findings, architecture diagram, walkthrough, and test stubs."""
     candidates = get_provider_candidates(cfg)
     policy_section = cfg.review_policy or ""
     system_prompt = (
-        "You are PatchPilot, an expert pull request analysis and verification engine.\n"
+        "You are PatchPilot, an expert pull request analysis and verification engine modeled after CodeRabbit.\n"
         f"{policy_section}\n\n"
         "Analyze the pull request thoroughly across:\n"
         "1. State-Machine & Idempotency Correctness (missing state/status guards before mutations, double-release or duplicate timeline appends on retry).\n"
@@ -525,6 +526,7 @@ async def run_pr_review(
         "{\n"
         '  "summary": "High-level technical summary of the PR and overall code quality.",\n'
         '  "poem": "",\n'
+        '  "architecture_diagram": "Optional valid Mermaid flowchart LR or sequenceDiagram illustrating how the modified modules interact (quote labels with special characters).",\n'
         '  "walkthrough": [\n'
         "    {\n"
         '      "file": "path/to/file.ext",\n'
@@ -540,7 +542,8 @@ async def run_pr_review(
         '      "severity": "bug|risk|nit",\n'
         '      "title": "Short title describing the verified issue",\n'
         '      "explanation": "Detailed explanation of why this is an issue and how to resolve it",\n'
-        '      "suggestion": "Optional exact replacement code line(s) or empty string"\n'
+        '      "suggestion": "Optional exact replacement code line(s) or empty string",\n'
+        '      "agent_prompt": "Concise 1-2 sentence copy-ready instruction telling an AI coding agent how to fix this exact line"\n'
         "    }\n"
         "  ],\n"
         '  "suggested_tests": [\n'
@@ -554,7 +557,7 @@ async def run_pr_review(
         "Rules:\n"
         "1. 'line' MUST match an [L<num>] line in the file diff.\n"
         "2. Do not comment on deleted lines.\n"
-        "3. Do NOT use any emojis anywhere in your output (no emojis in summary, impact, title, or explanation).\n"
+        "3. Do NOT use any emojis anywhere in your output (no emojis in summary, impact, title, explanation, or agent_prompt).\n"
         "4. Never report '[... Middle lines of file diff omitted ...]' as truncated code; those markers only indicate prompt budgeting.\n"
         "5. If no issues exist, 'findings' must be [] and 'verdict' must be 'PASS'."
     )
@@ -633,7 +636,6 @@ async def run_pr_review(
                         if not valid_for_file:
                             continue
                         if line_num not in valid_for_file:
-                            # Snap to closest valid diff line in the same file if within 5 lines
                             closest = min(valid_for_file, key=lambda vl: abs(vl - line_num))
                             if abs(closest - line_num) <= 5:
                                 line_num = closest
@@ -647,6 +649,7 @@ async def run_pr_review(
                         "title": title_str,
                         "explanation": exp_str,
                         "suggestion": str(f.get("suggestion", "")),
+                        "agent_prompt": strip_emojis(str(f.get("agent_prompt", ""))).strip(),
                     })
 
                 # Pass 2: Fact-check and verify candidate findings against the diff
@@ -659,7 +662,6 @@ async def run_pr_review(
                         candidate_findings=clean_findings,
                         annotated_diff=annotated_diff,
                     )
-                    # Re-validate line numbers after Pass 2
                     final_findings: list[dict[str, Any]] = []
                     for vf in verified_findings:
                         fp = vf.get("file")
@@ -685,6 +687,8 @@ async def run_pr_review(
                 data["summary"] = strip_emojis(str(data.get("summary", "Review completed."))).strip()
                 if data.get("poem"):
                     data["poem"] = strip_emojis(str(data["poem"])).strip()
+                if data.get("architecture_diagram"):
+                    data["architecture_diagram"] = strip_emojis(str(data["architecture_diagram"])).strip()
                 if isinstance(data.get("walkthrough"), list):
                     for wt in data["walkthrough"]:
                         if isinstance(wt, dict):
@@ -752,30 +756,108 @@ async def run_interactive_command(
     pr_diff: str,
     client: httpx.AsyncClient | None = None,
 ) -> str:
-    """Execute interactive @patchpilot explain, fix, review, or generate tests command with multi-key failover and zero emojis."""
+    """Execute interactive @patchpilot explain, fix, review, or test command with CodeRabbit-grade structured layout and zero emojis."""
     candidates = get_provider_candidates(cfg)
     cmd_lower = command.lower().strip()
 
+    annotated_context = ""
+    changed_files: list[str] = []
+    existing_test_files: list[str] = []
+    if not diff_hunk and pr_diff:
+        annotated_context, valid_map = annotate_diff(pr_diff, max_chars=44_000)
+        changed_files = list(valid_map.keys())
+        existing_test_files = [f for f in changed_files if "test" in f.lower()]
+
     if "explain" in cmd_lower:
-        mode_instruction = "Explain the code, root cause, and architectural trade-offs concisely."
+        mode_instruction = (
+            "Provide a CodeRabbit-grade architectural explanation using this exact Markdown structure:\n"
+            "### Executive Summary\n"
+            "(Concise overview of the purpose and behavior of the changes)\n\n"
+            "### Architecture & Control-Flow Diagram\n"
+            "(A valid ```mermaid flowchart LR or sequenceDiagram block showing how the components interact; quote node labels with parentheses)\n\n"
+            "### Component-by-Component Breakdown\n"
+            "| File / Module | Key Symbol | Architectural Role & Change Summary |\n"
+            "| :--- | :--- | :--- |\n\n"
+            "### Key Design Trade-offs & Edge Cases\n"
+            "(Bullet points analyzing invariants, failure modes, and operational considerations)"
+        )
     elif "fix" in cmd_lower:
-        mode_instruction = "Provide the exact verified fix with clear markdown code blocks and git suggestion syntax if applicable."
+        mode_instruction = (
+            "Provide a CodeRabbit-grade verified remediation using this exact Markdown structure:\n"
+            "### Root-Cause Diagnosis\n"
+            "| File | Line(s) | Defect Category | Root Cause |\n"
+            "| :--- | :--- | :--- | :--- |\n\n"
+            "### Committable Fix\n"
+            "(Provide exact replacement code using ```suggestion or ```diff blocks per affected file)\n\n"
+            "<details>\n"
+            "<summary><b>Prompt for AI Agents</b></summary>\n\n"
+            "```text\n"
+            "(Copy-ready 1-2 sentence prompt for an IDE coding agent to apply the fix)\n"
+            "```\n\n"
+            "</details>\n\n"
+            "### Verification Steps\n"
+            "(Concrete steps or test commands to verify the fix)"
+        )
     elif "security" in cmd_lower:
-        mode_instruction = "Perform an in-depth security and vulnerability audit (OWASP, injections, auth bypass, data leaks). Fact-check every finding against the diff."
+        mode_instruction = (
+            "Perform a rigorous security and vulnerability audit (OWASP Top 10, injections, auth bypass, secret exposure) using this exact Markdown structure:\n"
+            "### Security Audit Summary\n\n"
+            "### Threat & Vulnerability Matrix\n"
+            "| Severity | File & Line | CWE / Category | Summary |\n"
+            "| :--- | :--- | :--- | :--- |\n\n"
+            "### Verified Security Findings & Remediation\n"
+            "(For each confirmed issue, include root cause, a ```suggestion fix block, and a collapsible `<details><summary><b>Prompt for AI Agents</b></summary>` block)"
+        )
     elif "perf" in cmd_lower:
-        mode_instruction = "Analyze algorithmic complexity, database query patterns (N+1), memory bloat, and I/O efficiency. Fact-check every finding against the diff."
+        mode_instruction = (
+            "Perform an algorithmic and runtime performance audit (O(N^2) loops, DB N+1 queries, memory allocations, blocking I/O) using this exact Markdown structure:\n"
+            "### Performance Audit Summary\n\n"
+            "### Complexity & Bottleneck Matrix\n"
+            "| Impact | File & Line | Bottleneck Type | Current vs Target Complexity |\n"
+            "| :--- | :--- | :--- | :--- |\n\n"
+            "### Optimization Recommendations\n"
+            "(Include exact code replacements and a collapsible `<details><summary><b>Prompt for AI Agents</b></summary>` block)"
+        )
     elif any(k in cmd_lower for k in ["test", "tests"]):
-        mode_instruction = "Generate concrete, runnable unit test functions covering untested branches and edge cases."
+        existing_note = (
+            f"Existing test files already modified in this PR: {', '.join(f'`{t}`' for t in existing_test_files)}. "
+            "Do NOT duplicate test cases already present in those files; generate only missing edge cases, failure modes, and negative paths."
+            if existing_test_files
+            else "Match the repository's existing test framework (`pytest` or `unittest`)."
+        )
+        mode_instruction = (
+            "Generate a comprehensive, CodeRabbit-grade unit test suite using this exact Markdown structure:\n"
+            f"Note: {existing_note}\n\n"
+            "### Coverage Gap & Edge-Case Matrix\n"
+            "| Source File | Target Symbol | Untested Branch / Edge Case | Priority | Target Test File |\n"
+            "| :--- | :--- | :--- | :--- | :--- |\n\n"
+            "### Generated Test Suites (Modular Per File)\n"
+            "Organize tests into separate collapsible `<details open>` blocks—one per target test file (never combine unrelated modules into one giant file):\n"
+            "<details open>\n"
+            "<summary><b>Test Suite: <code>tests/test_<module>.py</code></b></summary>\n\n"
+            "```python\n"
+            "# Complete, self-contained, runnable test module for <module>\n"
+            "```\n\n"
+            "</details>\n\n"
+            "### Mocking & Fixture Notes\n"
+            "(Brief bullet points explaining mocked dependencies, isolated state, or environment flags)\n\n"
+            "### Verification Commands\n"
+            "```bash\n"
+            "# Exact CLI command to run the generated test suites\n"
+            "```"
+        )
     else:
-        mode_instruction = "Review the requested code changes constructively, verifying every finding against the actual diff lines."
+        mode_instruction = (
+            "Review the requested code changes constructively and objectively, verifying every finding against the actual diff lines."
+        )
 
     system_prompt = (
         f"{cfg.review_policy or ''}\n\n"
         f"You are PatchPilot responding to an interactive `{command}` command on a GitHub Pull Request.\n"
-        f"{mode_instruction}\n"
-        "Rules:\n"
+        f"{mode_instruction}\n\n"
+        "Strict Rules:\n"
         "1. Do NOT use any emojis anywhere in your response.\n"
-        "2. Verify every claim against the provided diff before reporting it.\n"
+        "2. Verify every symbol name, route path, and signature against the provided diff before writing code or findings.\n"
         "3. Never report '[... Middle lines of file diff omitted ...]' as truncated code."
     )
 
@@ -785,7 +867,6 @@ async def run_interactive_command(
     if diff_hunk:
         context_parts.append(f"Target Diff Hunk:\n```diff\n{diff_hunk}\n```")
     else:
-        annotated_context, _ = annotate_diff(pr_diff, max_chars=44_000)
         context_parts.append(f"Annotated PR Diff Context:\n```diff\n{annotated_context}\n```")
 
     close_client = False

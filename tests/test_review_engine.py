@@ -2,13 +2,51 @@
 
 from __future__ import annotations
 
+import httpx
 import pytest
-from app.github_auth import build_review_summary_card, strip_emojis
+from app.github_auth import (
+    build_loading_review_card,
+    build_review_summary_card,
+    complete_check_indicator,
+    create_pending_pr_review,
+    publish_pr_review,
+    start_check_indicator,
+    strip_emojis,
+    update_pr_review_card,
+)
 from app.llm import annotate_diff, extract_json_payload
 
 
+def test_build_loading_review_card_stages_and_no_emojis():
+    """Verify build_loading_review_card renders a 5-stage live verification pipeline without emojis."""
+    card = build_loading_review_card(
+        requested_by="89Aman",
+        commit_sha="abcdef123456",
+        command="review",
+        target_ref="89Aman/AgentTrustLedger#2",
+        stage_statuses={
+            "diff": "COMPLETED (4 files)",
+            "security": "COMPLETED (Clean)",
+            "triage": "COMPLETED (size:M, risk:low)",
+            "pass1": "RUNNING...",
+            "pass2": "QUEUED",
+        },
+    )
+    assert card.startswith("<!-- patchpilot-ai-review -->")
+    assert "## PatchPilot AI PR Review" in card
+    assert "**Status:** `IN PROGRESS`" in card
+    assert "**Requested by:** @89Aman" in card
+    assert "**Target:** `89Aman/AgentTrustLedger#2`" in card
+    assert "### Live Verification Pipeline" in card
+    assert "`COMPLETED (4 files)`" in card
+    assert "`COMPLETED (Clean)`" in card
+    assert "`RUNNING...`" in card
+    assert "`QUEUED`" in card
+    assert card == strip_emojis(card)
+
+
 def test_build_review_summary_card_coderabbit_elements():
-    """Verify build_review_summary_card formats checks, walkthrough, poem, user tag, and test stubs without emojis."""
+    """Verify build_review_summary_card formats checks, walkthrough, architecture diagram, agent prompts, poem, user tag, and test stubs without emojis."""
     card = build_review_summary_card(
         verdict="WARN",
         commit_sha="abcdef123456",
@@ -28,6 +66,7 @@ def test_build_review_summary_card_coderabbit_elements():
             {"file": "app/pipeline.py", "impact": "⚡ Perf", "summary": "Optimized memory buffers"},
             {"file": "app/security.py", "impact": "🛡️ Security", "summary": "Added wallet protection"},
         ],
+        architecture_diagram="flowchart LR\n    A[\"Input Stream\"] --> B[\"Memory Buffer\"]",
         poem="Data streams in morning light,\nBuffers flush with all their might!",
         suggested_tests=[
             {
@@ -45,6 +84,7 @@ def test_build_review_summary_card_coderabbit_elements():
                 "title": "Unbounded buffer growth",
                 "explanation": "Buffer can grow without limit on slow consumers.",
                 "suggestion": "buffer = deque(maxlen=1024)",
+                "agent_prompt": "In `app/pipeline.py` around line 42, bound `buffer` using `deque(maxlen=1024)`.",
             }
         ],
         verification_status="2-Pass Fact-Checked",
@@ -62,16 +102,113 @@ def test_build_review_summary_card_coderabbit_elements():
     assert "🛡️" not in card
     assert "⚡" not in card
     assert "🟢" not in card
-    # Check walkthrough table
-    assert "Changes Walkthrough" in card
+    # Check collapsible walkthrough table & Mermaid architecture diagram
+    assert "File Walkthrough &amp; Architecture Flow" in card
+    assert "```mermaid" in card
+    assert "flowchart LR" in card
     assert "`app/pipeline.py`" in card
     assert "Optimized memory buffers" in card
-    # Check verified findings section
+    # Check verified findings section and Prompt for AI Agents
     assert "### Verified Findings" in card
     assert "Unbounded buffer growth" in card
+    assert "Prompt for AI Agents" in card
+    assert "deque(maxlen=1024)" in card
     # Check suggested unit tests
     assert "Suggested Unit Tests (1)" in card
     assert "def test_eof_flush" in card
+
+
+@pytest.mark.asyncio
+async def test_pending_review_registration_and_in_place_update(monkeypatch):
+    """Verify create_pending_pr_review registers bot in Reviewers via POST /reviews and publish_pr_review updates it in-place via PUT."""
+    calls: list[tuple[str, str, dict]] = []
+
+    async def mock_post(url, headers=None, json=None):
+        calls.append(("POST", url, json or {}))
+        if url.endswith("/reviews"):
+            return httpx.Response(200, json={"id": 987654})
+        if url.endswith("/check-runs"):
+            return httpx.Response(201, json={"id": 555111})
+        return httpx.Response(200, json={"id": 111})
+
+    async def mock_put(url, headers=None, json=None):
+        calls.append(("PUT", url, json or {}))
+        return httpx.Response(200, json={"id": 987654})
+
+    async def mock_patch(url, headers=None, json=None):
+        calls.append(("PATCH", url, json or {}))
+        return httpx.Response(200, json={"id": 555111})
+
+    async with httpx.AsyncClient() as client:
+        monkeypatch.setattr(client, "post", mock_post)
+        monkeypatch.setattr(client, "put", mock_put)
+        monkeypatch.setattr(client, "patch", mock_patch)
+
+        loading_body = build_loading_review_card(requested_by="89Aman", commit_sha="abc1234")
+        handle = await create_pending_pr_review(
+            token="ghs_test",
+            repo_full_name="89Aman/AgentTrustLedger",
+            pr_number=2,
+            head_sha="abc1234",
+            body=loading_body,
+            client=client,
+        )
+        assert handle == {"kind": "review", "id": 987654}
+
+        check_handle = await start_check_indicator(
+            token="ghs_test",
+            repo_full_name="89Aman/AgentTrustLedger",
+            head_sha="abc1234",
+            command="review",
+            client=client,
+        )
+        assert check_handle["head_sha"] == "abc1234"
+        assert check_handle["check_run_id"] == 555111
+
+        # Update mid-flight loading card
+        updated = await update_pr_review_card(
+            token="ghs_test",
+            repo_full_name="89Aman/AgentTrustLedger",
+            pr_number=2,
+            handle=handle,
+            body="Updated stage progress",
+            client=client,
+        )
+        assert updated is True
+
+        # Publish final review in-place
+        await publish_pr_review(
+            token="ghs_test",
+            repo_full_name="89Aman/AgentTrustLedger",
+            pr_number=2,
+            head_sha="abc1234",
+            review_data={
+                "verdict": "PASS",
+                "summary": "All checks passed.",
+                "findings": [],
+                "walkthrough": [{"file": "app/main.py", "impact": "Core", "summary": "Clean"}],
+            },
+            valid_lines={"app/main.py": {1, 2, 3}},
+            client=client,
+            requested_by="89Aman",
+            existing_review=handle,
+        )
+
+        await complete_check_indicator(
+            token="ghs_test",
+            repo_full_name="89Aman/AgentTrustLedger",
+            check_handle=check_handle,
+            verdict="PASS",
+            summary_text="All checks passed.",
+            client=client,
+        )
+
+    # Verify POST /pulls/2/reviews was called once (initial loading card) and PUT /pulls/2/reviews/987654 was called twice (mid-stage + final)
+    post_review_calls = [c for c in calls if c[0] == "POST" and c[1].endswith("/pulls/2/reviews")]
+    put_review_calls = [c for c in calls if c[0] == "PUT" and c[1].endswith("/pulls/2/reviews/987654")]
+    assert len(post_review_calls) == 1
+    assert len(put_review_calls) == 2
+    assert "All checks passed." in put_review_calls[-1][2]["body"]
 
 
 def test_strip_emojis_and_annotate_diff_no_midline_cut():
