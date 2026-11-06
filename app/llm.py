@@ -46,6 +46,37 @@ def is_noise_file(filepath: str) -> bool:
     return any(basename.endswith(suffix) or filepath.endswith(suffix) for suffix in EXCLUDED_SUFFIXES)
 
 
+def budget_text(text: str, limit: int) -> str:
+    """Keep complete lines within a hard budget and explicitly disclose omissions."""
+    limit = max(0, limit)
+    if len(text) <= limit:
+        return text
+    notice = "[Coverage limited: remaining lines omitted]"
+    if limit < len(notice):
+        return ""
+    out = []
+    remaining = limit - len(notice) - 1
+    for line in text.splitlines():
+        if len(line) + 1 > remaining:
+            break
+        out.append(line)
+        remaining -= len(line) + 1
+    return "\n".join(out + [notice])
+
+
+def visible_lines(text: str) -> dict[str, set[int]]:
+    result = {}
+    path = None
+    for line in text.splitlines():
+        if line.startswith("--- ") and line.endswith(" ---"):
+            path = line[4:-4]
+            result.setdefault(path, set())
+        match = re.match(r"\[L(\d+)\]", line)
+        if path and match:
+            result[path].add(int(match.group(1)))
+    return result
+
+
 def _excerpt_file_lines_safely(lines: list[str], budget_chars: int) -> str:
     """Excerpt a file's annotated diff lines on complete line boundaries, preserving both head and tail hunks."""
     full_text = "\n".join(lines)
@@ -155,7 +186,7 @@ def annotate_diff(raw_diff: str, max_chars: int = 48_000) -> tuple[str, dict[str
     # Multi-file proportional allocation so no file is dropped or cut mid-line
     active_indices = [i for i, (_, is_skip, _) in enumerate(file_blocks) if not is_skip]
     if not active_indices:
-        return full_joined[:max_chars], valid_lines
+        return budget_text(full_joined, max_chars), {}
 
     block_texts = ["\n".join(blk[2]) for blk in file_blocks]
     remaining_budget = max_chars - sum(len(block_texts[i]) + 1 for i in range(len(file_blocks)) if i not in active_indices)
@@ -193,7 +224,8 @@ def annotate_diff(raw_diff: str, max_chars: int = 48_000) -> tuple[str, dict[str
             budget = allocations.get(i, 3000)
             out_blocks.append(_excerpt_file_lines_safely(lines, budget))
 
-    return "\n".join(out_blocks), valid_lines
+    bounded = budget_text("\n".join(out_blocks), max_chars)
+    return bounded, visible_lines(bounded)
 
 
 def get_provider_endpoint(provider: str, base_url: str | None = None) -> str:
@@ -253,6 +285,7 @@ def extract_json_payload(content: str) -> dict[str, Any]:
     except Exception as exc:
         logger.warning("Failed parsing LLM output as JSON: %s (first 100 chars: %r)", exc, content_trimmed[:100])
         return {
+            "_parse_error": True,
             "summary": content_trimmed[:500] if content_trimmed else "Review completed without valid JSON payload.",
             "verdict": "WARN",
             "findings": [],
@@ -464,7 +497,7 @@ async def _verify_findings_with_llm(
 
     verify_user_prompt = (
         f"Candidate Findings to Fact-Check:\n```json\n{json.dumps(candidate_findings, indent=2)}\n```\n\n"
-        f"Annotated Diff Ground Truth:\n```diff\n{annotated_diff[:38000]}\n```"
+        f"Annotated Diff Ground Truth:\n```diff\n{annotated_diff}\n```"
     )
 
     payload = {
@@ -478,12 +511,13 @@ async def _verify_findings_with_llm(
 
     try:
         resp = await client.post(url, headers=headers, json=payload)
-        if resp.is_error:
-            return candidate_findings
+        resp.raise_for_status()
         content = resp.json()["choices"][0]["message"]["content"]
         parsed = extract_json_payload(content)
         verified = parsed.get("verified_findings")
         if isinstance(verified, list):
+            if any(not isinstance(f, dict) or not f.get("file") or not isinstance(f.get("line"), int) for f in verified):
+                raise ValueError("Invalid verified finding")
             result: list[dict[str, Any]] = []
             for vf in verified:
                 if isinstance(vf, dict) and vf.get("file") and vf.get("line") is not None:
@@ -498,9 +532,9 @@ async def _verify_findings_with_llm(
                     })
             return result
     except Exception as exc:
-        logger.debug("Second-pass verification fallback to deterministic findings: %s", exc)
+        raise ValueError("Second-pass verification failed") from exc
 
-    return candidate_findings
+    raise ValueError("Invalid verifier response")
 
 
 async def run_pr_review(
@@ -514,11 +548,14 @@ async def run_pr_review(
 ) -> dict[str, Any]:
     """Execute unified 2-pass AI review of pull request with fact-checked findings, architecture diagram, walkthrough, and test stubs."""
     # Apply the privacy boundary to all prompt fields, including context/deletions.
-    annotated_diff = sanitize_diff_text(annotated_diff)
-    pr_title = sanitize_diff_text(pr_title)
-    pr_body = sanitize_diff_text(pr_body)
+    annotated_diff = budget_text(sanitize_diff_text(annotated_diff), 32000)
+    if valid_lines is not None:
+        shown = visible_lines(annotated_diff)
+        valid_lines = {path: lines & shown.get(path, set()) for path, lines in valid_lines.items()}
+    pr_title = budget_text(sanitize_diff_text(pr_title), 1000)
+    pr_body = budget_text(sanitize_diff_text(pr_body), 4000)
     candidates = get_provider_candidates(cfg)
-    policy_section = sanitize_diff_text(cfg.review_policy or "")
+    policy_section = budget_text(sanitize_diff_text(cfg.review_policy or ""), 4000)
     system_prompt = (
         "You are PatchPilot, an expert pull request analysis and verification engine modeled after CodeRabbit.\n"
         f"{policy_section}\n\n"
@@ -570,7 +607,7 @@ async def run_pr_review(
     user_prompt = (
         f"PR Title: {pr_title}\n"
         f"PR Description: {pr_body or 'None'}\n\n"
-        f"Annotated Diff (`[L<num>]` is line number):\n```diff\n{annotated_diff[:48000]}\n```"
+        f"Annotated Diff (`[L<num>]` is line number):\n```diff\n{annotated_diff}\n```"
     )
 
     close_client = False
@@ -618,7 +655,11 @@ async def run_pr_review(
                 content = resp.json()["choices"][0]["message"]["content"]
                 data = extract_json_payload(content)
 
-                raw_findings = data.get("findings", [])
+                if not isinstance(data, dict) or data.get("_parse_error") or not isinstance(data.get("findings"), list) or data.get("verdict") not in {"PASS", "WARN", "BLOCK"}:
+                    raise ValueError("Invalid review response schema")
+                raw_findings = data["findings"]
+                if any(not isinstance(f, dict) or not isinstance(f.get("line"), int) or not f.get("file") for f in raw_findings):
+                    raise ValueError("Invalid review finding")
                 clean_findings: list[dict[str, Any]] = []
 
                 # Filter against valid lines to prevent hallucinated line comments
@@ -658,6 +699,7 @@ async def run_pr_review(
                     })
 
                 # Pass 2: Fact-check and verify candidate findings against the diff
+                verification_performed = False
                 if clean_findings:
                     verified_findings = await _verify_findings_with_llm(
                         client=client,
@@ -667,6 +709,7 @@ async def run_pr_review(
                         candidate_findings=clean_findings,
                         annotated_diff=annotated_diff,
                     )
+                    verification_performed = True
                     final_findings: list[dict[str, Any]] = []
                     for vf in verified_findings:
                         fp = vf.get("file")
@@ -699,7 +742,11 @@ async def run_pr_review(
                         if isinstance(wt, dict):
                             wt["impact"] = strip_emojis(str(wt.get("impact", "Refactor"))).strip() or "Refactor"
                             wt["summary"] = strip_emojis(str(wt.get("summary", ""))).strip()
-                data["verification_status"] = "2-Pass Fact-Checked"
+                data["verification_status"] = "2-Pass Fact-Checked" if verification_performed else "Single-pass: no verifiable candidate findings"
+                if "Coverage limited:" in annotated_diff or "Middle lines of file diff omitted" in annotated_diff:
+                    data["summary"] += " Review coverage is limited; omitted code was not analyzed."
+                    if data.get("verdict") == "PASS":
+                        data["verdict"] = "WARN"
 
                 # Calculate emoji-free review check category statuses
                 bugs = sum(1 for f in clean_findings if f["severity"] == "bug")
@@ -708,8 +755,7 @@ async def run_pr_review(
 
                 if bugs > 0 and str(data.get("verdict", "")).upper() == "PASS":
                     data["verdict"] = "WARN"
-                elif bugs == 0 and risks == 0 and not clean_findings:
-                    data["verdict"] = "PASS"
+
 
                 checks = {
                     "Security": "Clean" if not any("security" in f["title"].lower() or "secret" in f["title"].lower() for f in clean_findings) else "Issues Found",
@@ -894,8 +940,8 @@ async def run_interactive_command(
                 "model": cand["model"],
                 "temperature": 0.1,
                 "messages": [
-                    {"role": "system", "content": sanitize_diff_text(system_prompt)},
-                    {"role": "user", "content": sanitize_diff_text("\n\n".join(context_parts))},
+                    {"role": "system", "content": budget_text(sanitize_diff_text(system_prompt), 8000)},
+                    {"role": "user", "content": budget_text(sanitize_diff_text("\n\n".join(context_parts)), 40000)},
                 ],
             }
             try:

@@ -449,8 +449,8 @@ async def complete_check_indicator(
     }
     head_sha = check_handle["head_sha"]
     verdict_upper = verdict.upper().strip()
-    conclusion = "failure" if verdict_upper == "BLOCK" else "success"
-    status_state = "failure" if verdict_upper == "BLOCK" else "success"
+    conclusion = "success" if verdict_upper in {"PASS", "APPROVE"} else "failure"
+    status_state = "success" if verdict_upper in {"PASS", "APPROVE"} else "failure"
     clean_title = strip_emojis(f"Verdict: {verdict_upper} — {summary_text[:110]}").strip()
 
     try:
@@ -811,7 +811,13 @@ async def publish_pr_review(
                     }
                     if head_sha:
                         inline_payload["commit_id"] = head_sha
-                    await client.post(url, headers=headers, json=inline_payload)
+                    inline_response = await client.post(url, headers=headers, json=inline_payload)
+                    if inline_response.status_code == 422:
+                        fallback = summary_card + "\n\nInline placement failed; findings are preserved below:\n\n" + "\n\n".join(c["path"] + ":" + str(c["line"]) + "\n" + c["body"] for c in comments)
+                        if not await update_pr_review_card(token, repo_full_name, pr_number, existing_review, fallback, client=client):
+                            raise RuntimeError("Could not preserve rejected inline findings")
+                        return {"status": "summary_only", "id": existing_review["id"]}
+                    inline_response.raise_for_status()
                 return {"status": "updated_in_place", "id": existing_review["id"]}
 
         payload: dict[str, Any] = {

@@ -6,6 +6,8 @@ import logging
 import os
 import re
 import secrets
+from contextlib import suppress
+from app.jobs import enqueue, worker, current_job, remembered
 from typing import Any
 from fastapi import (
     BackgroundTasks,
@@ -94,7 +96,13 @@ async def lifespan(app: FastAPI):
     logger.info("Initializing PatchPilot database schema...")
     await init_db()
     logger.info("PatchPilot database initialized.")
-    yield
+    task = asyncio.create_task(worker())
+    try:
+        yield
+    finally:
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
 
 
 app = FastAPI(
@@ -1128,6 +1136,9 @@ async def _get_owner_config(owner: str) -> VaultConfig | None:
 
 async def handle_pr_event(payload: dict[str, Any]) -> None:
     """Background task to fetch PR diff, scan secrets, triage risk, run review, and publish comments."""
+    pending_review = check_handle = None
+    token = repo_full_name = ""
+    pr_number = 0
     try:
         installation_id = payload.get("installation", {}).get("id")
         repository = payload.get("repository", {})
@@ -1159,7 +1170,7 @@ async def handle_pr_event(payload: dict[str, Any]) -> None:
             return
 
         allowed, rate_msg = global_rate_limiter.check_and_increment(repo_full_name, max_requests=25, window_seconds=3600)
-        if not allowed:
+        if not allowed and current_job.get() is None:
             logger.warning("Rate limit reached for %s: %s", repo_full_name, rate_msg)
             return
 
@@ -1173,6 +1184,15 @@ async def handle_pr_event(payload: dict[str, Any]) -> None:
         async with httpx.AsyncClient(timeout=60.0) as client:
             token = await get_installation_token(installation_id, client=client)
 
+            latest = await fetch_pr_metadata(token, repo_full_name, pr_number, client=client)
+            if latest.get("head", {}).get("sha") != head_sha or latest.get("state") == "closed":
+                job = current_job.get()
+                if job:
+                    handles = json.loads(job.handles)
+                    await complete_check_indicator(token, repo_full_name, handles.get("check"), verdict="ERROR", summary_text="Superseded by a newer commit or closed PR.", client=client)
+                    await update_pr_review_card(token, repo_full_name, pr_number, handles.get("review"), "Review superseded by a newer commit or closed PR.", client=client)
+                return
+
             # Immediately register PatchPilot in Reviewers sidebar and post live loading card
             loading_card = build_loading_review_card(
                 requested_by=pr_author,
@@ -1180,7 +1200,7 @@ async def handle_pr_event(payload: dict[str, Any]) -> None:
                 command="review",
                 target_ref=f"{repo_full_name}#{pr_number}",
             )
-            pending_review = await create_pending_pr_review(
+            pending_review = await remembered("review", create_pending_pr_review,
                 token,
                 repo_full_name,
                 pr_number,
@@ -1188,7 +1208,7 @@ async def handle_pr_event(payload: dict[str, Any]) -> None:
                 loading_card,
                 client=client,
             )
-            check_handle = await start_check_indicator(
+            check_handle = await remembered("check", start_check_indicator,
                 token,
                 repo_full_name,
                 head_sha,
@@ -1321,10 +1341,21 @@ async def handle_pr_event(payload: dict[str, Any]) -> None:
             logger.info("Published review and triage for %s#%s (size: %s, risk: %s)", repo_full_name, pr_number, triage.size_tier, triage.risk_level)
     except Exception as exc:
         logger.exception("Failed processing PR review webhook: %s", exc)
+        if current_job.get() is not None:
+            raise
+        if token and repo_full_name:
+            await complete_check_indicator(token, repo_full_name, check_handle, verdict="ERROR", summary_text="Review failed; queued jobs retry automatically.")
+            if pending_review:
+                await update_pr_review_card(token, repo_full_name, pr_number, pending_review, "PatchPilot could not complete this review. The job will retry within its retry budget.")
+        if current_job.get() is not None:
+            raise
 
 
 async def handle_comment_event(event_type: str, payload: dict[str, Any]) -> None:
     """Background task to run full verified PR review or answer interactive @patchpilot commands."""
+    pending_review = check_handle = None
+    token = repo_full_name = ""
+    pr_number = 0
     try:
         comment = payload.get("comment", {})
         comment_body = comment.get("body", "")
@@ -1369,7 +1400,7 @@ async def handle_comment_event(event_type: str, payload: dict[str, Any]) -> None
             logger.info("Wallet Shield blocked comment for %s#%s: %s", repo_full_name, pr_number, auth_reason)
             return
         allowed, rate_msg = global_rate_limiter.check_and_increment(repo_full_name, max_requests=25, window_seconds=3600)
-        if not allowed:
+        if not allowed and current_job.get() is None:
             logger.warning("Rate limit reached for %s: %s", repo_full_name, rate_msg)
             return
 
@@ -1417,7 +1448,7 @@ async def handle_comment_event(event_type: str, payload: dict[str, Any]) -> None
                     command=command,
                     target_ref=f"{repo_full_name}#{pr_number}",
                 )
-                pending_review = await create_pending_pr_review(
+                pending_review = await remembered("review", create_pending_pr_review,
                     token=token,
                     repo_full_name=repo_full_name,
                     pr_number=pr_number,
@@ -1425,7 +1456,7 @@ async def handle_comment_event(event_type: str, payload: dict[str, Any]) -> None
                     body=loading_card,
                     client=client,
                 )
-                check_handle = await start_check_indicator(
+                check_handle = await remembered("check", start_check_indicator,
                     token=token,
                     repo_full_name=repo_full_name,
                     head_sha=head_sha,
@@ -1554,6 +1585,8 @@ async def handle_comment_event(event_type: str, payload: dict[str, Any]) -> None
                 )
             except Exception as llm_exc:
                 logger.warning("Interactive LLM call failed on %s#%s: %s", repo_full_name, pr_number, llm_exc)
+                if current_job.get() is not None:
+                    raise
                 has_key = _vault_has_usable_key(cfg)
                 active_cands = [
                     c for c in get_provider_candidates(cfg)
@@ -1621,6 +1654,14 @@ async def handle_comment_event(event_type: str, payload: dict[str, Any]) -> None
             logger.info("Replied to %s command on %s#%s", command, repo_full_name, pr_number)
     except Exception as exc:
         logger.exception("Failed processing interactive comment: %s", exc)
+        if current_job.get() is not None:
+            raise
+        if token and repo_full_name:
+            await complete_check_indicator(token, repo_full_name, check_handle, verdict="ERROR", summary_text="Review failed; queued jobs retry automatically.")
+            if pending_review:
+                await update_pr_review_card(token, repo_full_name, pr_number, pending_review, "PatchPilot could not complete this review. The job will retry within its retry budget.")
+        if current_job.get() is not None:
+            raise
 
 
 # -----------------------------------------------------------------------------
@@ -1648,14 +1689,7 @@ async def github_webhook(
     # 1. Pull Request Events
     if x_github_event == "pull_request" and action in ("opened", "synchronize", "reopened"):
         if not payload.get("pull_request", {}).get("draft", False):
-            if os.environ.get("TESTING") == "1":
-                background_tasks.add_task(handle_pr_event, payload)
-            else:
-                task = asyncio.create_task(handle_pr_event(payload))
-                try:
-                    await asyncio.wait_for(asyncio.shield(task), timeout=8.5)
-                except asyncio.TimeoutError:
-                    pass
+            await enqueue(x_github_event, payload, request.headers.get("X-GitHub-Delivery", ""))
             return {"status": "queued_pr_review"}
         return {"status": "ignored_draft"}
 
@@ -1665,14 +1699,7 @@ async def github_webhook(
         if sender_type != "bot":
             body_text = payload.get("comment", {}).get("body", "")
             if COMMAND_RE.search(body_text):
-                if os.environ.get("TESTING") == "1":
-                    background_tasks.add_task(handle_comment_event, x_github_event, payload)
-                else:
-                    task = asyncio.create_task(handle_comment_event(x_github_event, payload))
-                    try:
-                        await asyncio.wait_for(asyncio.shield(task), timeout=8.5)
-                    except asyncio.TimeoutError:
-                        pass
+                await enqueue(x_github_event, payload, request.headers.get("X-GitHub-Delivery", ""))
                 return {"status": "queued_comment_reply"}
 
         return {"status": "ignored_comment"}

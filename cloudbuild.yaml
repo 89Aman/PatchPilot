@@ -43,6 +43,9 @@ steps:
       - "--platform"
       - "managed"
       - "--allow-unauthenticated"
+      - "--no-cpu-throttling"
+      - "--min-instances"
+      - "1"
       - "--port"
       - "8080"
 
