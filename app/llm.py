@@ -7,6 +7,7 @@ import httpx
 from app.crypto import decrypt_secret
 from app.db import VaultConfig
 from app.github_auth import strip_emojis
+from app.security import sanitize_diff_text
 
 logger = logging.getLogger(__name__)
 
@@ -471,7 +472,7 @@ async def _verify_findings_with_llm(
         "temperature": 0.0,
         "messages": [
             {"role": "system", "content": verify_system_prompt},
-            {"role": "user", "content": verify_user_prompt},
+            {"role": "user", "content": sanitize_diff_text(verify_user_prompt)},
         ],
     }
 
@@ -512,8 +513,12 @@ async def run_pr_review(
     triage: Any | None = None,
 ) -> dict[str, Any]:
     """Execute unified 2-pass AI review of pull request with fact-checked findings, architecture diagram, walkthrough, and test stubs."""
+    # Apply the privacy boundary to all prompt fields, including context/deletions.
+    annotated_diff = sanitize_diff_text(annotated_diff)
+    pr_title = sanitize_diff_text(pr_title)
+    pr_body = sanitize_diff_text(pr_body)
     candidates = get_provider_candidates(cfg)
-    policy_section = cfg.review_policy or ""
+    policy_section = sanitize_diff_text(cfg.review_policy or "")
     system_prompt = (
         "You are PatchPilot, an expert pull request analysis and verification engine modeled after CodeRabbit.\n"
         f"{policy_section}\n\n"
@@ -889,8 +894,8 @@ async def run_interactive_command(
                 "model": cand["model"],
                 "temperature": 0.1,
                 "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": "\n\n".join(context_parts)},
+                    {"role": "system", "content": sanitize_diff_text(system_prompt)},
+                    {"role": "user", "content": sanitize_diff_text("\n\n".join(context_parts))},
                 ],
             }
             try:

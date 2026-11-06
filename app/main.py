@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import re
+import secrets
 from typing import Any
 from fastapi import (
     BackgroundTasks,
@@ -23,7 +24,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 import httpx
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.crypto import decrypt_secret, encrypt_secret
@@ -69,7 +70,6 @@ from app.models_catalog import OFFICIAL_FREE_MODELS
 from app.security import (
     check_pr_authorization,
     global_rate_limiter,
-    sanitize_diff_text,
     scan_diff_for_secrets,
 )
 from app.triage import compute_pr_triage
@@ -125,6 +125,18 @@ if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
+async def _verified_clerk_identity(payload: dict[str, Any]) -> dict[str, Any]:
+    """Bind authorization to Clerk's immutable subject or a server-verified GitHub account."""
+    sub = payload.get("sub") or ""
+    user_info = await fetch_clerk_user(sub) if settings.clerk_secret_key and sub else None
+    identity = extract_clerk_identity(payload, user_info)
+    # Display usernames and email prefixes are user-editable, not GitHub ownership proof.
+    github_username = (user_info or {}).get("github_username") or ""
+    identity.update(login=github_username or sub, github_username=github_username,
+                    github_connected=bool(github_username))
+    return identity
+
+
 async def verify_admin_or_session(
     owner: str,
     x_admin_token: str | None = Header(None, alias="X-Admin-Token"),
@@ -145,7 +157,7 @@ async def verify_admin_or_session(
             return
         clerk_payload = await verify_clerk_token(bearer_val)
         if clerk_payload:
-            identity = extract_clerk_identity(clerk_payload)
+            identity = await _verified_clerk_identity(clerk_payload)
             sub = clerk_payload.get("sub", "").lower()
             gh_user = (identity.get("github_username") or "").lower()
             if identity["login"].lower() == owner_clean or sub == owner_clean or (gh_user and gh_user == owner_clean):
@@ -161,7 +173,7 @@ async def verify_admin_or_session(
     if clerk_session:
         clerk_payload = await verify_clerk_token(clerk_session)
         if clerk_payload:
-            identity = extract_clerk_identity(clerk_payload)
+            identity = await _verified_clerk_identity(clerk_payload)
             sub = clerk_payload.get("sub", "").lower()
             gh_user = (identity.get("github_username") or "").lower()
             if identity["login"].lower() == owner_clean or sub == owner_clean or (gh_user and gh_user == owner_clean):
@@ -359,7 +371,7 @@ async def logo():
 # -----------------------------------------------------------------------------
 
 @app.get("/auth/login", tags=["Authentication"])
-async def auth_login():
+async def auth_login(request: Request):
     """Redirect user to GitHub OAuth authorization screen."""
     client_id = settings.GITHUB_CLIENT_ID.strip()
     if not client_id:
@@ -367,8 +379,12 @@ async def auth_login():
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="GITHUB_CLIENT_ID is not configured in .env. OAuth login requires a valid GitHub OAuth App Client ID (e.g., Iv1... or Iv23...).",
         )
-    url = get_oauth_authorize_url(client_id)
-    return RedirectResponse(url=url)
+    oauth_state = secrets.token_urlsafe(32)
+    url = get_oauth_authorize_url(client_id, state=oauth_state)
+    response = RedirectResponse(url=url)
+    response.set_cookie("patchpilot_oauth_state", oauth_state, httponly=True,
+                        secure=request.url.scheme == "https", samesite="lax", max_age=600)
+    return response
 
 
 async def _upsert_user_account(
@@ -433,6 +449,13 @@ async def auth_callback(request: Request, code: str, db: AsyncSession = Depends(
             detail="OAuth credentials (GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET) not fully configured in .env",
         )
 
+    expected_state = request.cookies.get("patchpilot_oauth_state", "")
+    supplied_state = request.query_params.get("state", "")
+    if not expected_state or not supplied_state or not hmac.compare_digest(
+        expected_state.encode(), supplied_state.encode()
+    ):
+        raise HTTPException(status_code=400, detail="Invalid or missing OAuth state. Start sign-in again.")
+
     async with httpx.AsyncClient(timeout=30.0) as client:
         user_token = await exchange_oauth_code(code, client_id, client_secret, client=client)
         profile = await fetch_user_profile(user_token, client=client)
@@ -457,6 +480,7 @@ async def auth_callback(request: Request, code: str, db: AsyncSession = Depends(
     jwt_token = create_session_jwt(session_payload)
 
     response = RedirectResponse(url="/dashboard", status_code=status.HTTP_302_FOUND)
+    response.delete_cookie("patchpilot_oauth_state")
     response.set_cookie(
         key="patchpilot_session",
         value=jwt_token,
@@ -497,19 +521,17 @@ async def clerk_session(request: Request, body: ClerkSessionRequest, db: AsyncSe
         )
 
     sub = payload.get("sub", "")
-    clerk_user_info = None
     github_token = ""
     if settings.clerk_secret_key and sub:
-        clerk_user_info = await fetch_clerk_user(sub)
         github_token = await fetch_clerk_oauth_token(sub, "oauth_github") or ""
 
-    identity = extract_clerk_identity(payload, clerk_user_info or body.user)
+    identity = await _verified_clerk_identity(payload)
     await _upsert_user_account(
         db,
         login=identity["login"],
         name=identity["name"],
         avatar_url=identity["avatar_url"],
-        email=(clerk_user_info or {}).get("email") or payload.get("email"),
+        email=payload.get("email"),
         clerk_id=sub,
         github_username=identity.get("github_username") or None,
         github_token=github_token or None,
@@ -581,11 +603,7 @@ async def auth_me(
     if token:
         clerk_payload = await verify_clerk_token(token)
         if clerk_payload:
-            clerk_user_info = None
-            sub = clerk_payload.get("sub", "")
-            if settings.clerk_secret_key and sub:
-                clerk_user_info = await fetch_clerk_user(sub)
-            identity = extract_clerk_identity(clerk_payload, clerk_user_info)
+            identity = await _verified_clerk_identity(clerk_payload)
             return {
                 "logged_in": True,
                 "user": identity,
@@ -1094,20 +1112,14 @@ async def _get_owner_config(owner: str) -> VaultConfig | None:
         if _vault_has_usable_key(cfg):
             return cfg
 
-        # Check if owner is linked via UserAccount.github_username -> UserAccount.login
-        acct_res = await session.execute(select(UserAccount))
-        for acct in acct_res.scalars().all():
-            gh_user = (acct.github_username or "").strip().lower()
-            login_user = (acct.login or "").strip().lower()
-            if gh_user == owner_clean and login_user and login_user != owner_clean:
-                alt_res = await session.execute(select(VaultConfig).where(VaultConfig.owner == login_user))
-                alt_cfg = alt_res.scalar_one_or_none()
-                if _vault_has_usable_key(alt_cfg):
-                    return alt_cfg
-
-        # Fallback: on single-tenant / self-hosted instances, check if any VaultConfig has a usable key
-        all_res = await session.execute(select(VaultConfig))
-        for row in all_res.scalars().all():
+        # Resolve only explicit account links in SQL, without loading every user's keys.
+        linked = await session.execute(
+            select(VaultConfig)
+            .join(UserAccount, VaultConfig.owner == UserAccount.login)
+            .where(func.lower(UserAccount.github_username) == owner_clean)
+            .order_by(VaultConfig.owner)
+        )
+        for row in linked.scalars():
             if _vault_has_usable_key(row):
                 return row
 
@@ -1250,15 +1262,12 @@ async def handle_pr_event(payload: dict[str, Any]) -> None:
                 client=client,
             )
 
-            # 4. Sanitize diff before LLM processing if secrets were detected
-            clean_annotated_diff = sanitize_diff_text(annotated_diff, secret_findings) if secret_count > 0 else annotated_diff
-
-            # 5. Run AI PR Review with clean diff
+            # Redaction is enforced by run_pr_review for every outbound prompt.
             review_data = await run_pr_review(
                 cfg=cfg,
                 pr_title=pr_title,
                 pr_body=pr_body,
-                annotated_diff=clean_annotated_diff,
+                annotated_diff=annotated_diff,
                 client=client,
                 valid_lines=valid_lines,
                 triage=triage,
@@ -1346,6 +1355,22 @@ async def handle_comment_event(event_type: str, payload: dict[str, Any]) -> None
             diff_hunk = None
 
         if not installation_id or not repo_full_name or not pr_number:
+            return
+
+        sender_type = str(comment.get("user", {}).get("type") or payload.get("sender", {}).get("type", "")).lower()
+        if sender_type == "bot":
+            return
+        authorized, auth_reason = check_pr_authorization(
+            author_association=comment.get("author_association"),
+            is_fork=False,
+            is_private=bool(repository.get("private", False)),
+        )
+        if not authorized:
+            logger.info("Wallet Shield blocked comment for %s#%s: %s", repo_full_name, pr_number, auth_reason)
+            return
+        allowed, rate_msg = global_rate_limiter.check_and_increment(repo_full_name, max_requests=25, window_seconds=3600)
+        if not allowed:
+            logger.warning("Rate limit reached for %s: %s", repo_full_name, rate_msg)
             return
 
         cfg = await _get_owner_config(owner)
@@ -1458,15 +1483,11 @@ async def handle_comment_event(event_type: str, payload: dict[str, Any]) -> None
                         client=client,
                     )
 
-                    clean_annotated_diff = (
-                        sanitize_diff_text(annotated_diff, secret_findings) if secret_count > 0 else annotated_diff
-                    )
-
                     review_data = await run_pr_review(
                         cfg=cfg,
                         pr_title=pr_title,
                         pr_body=pr_body,
-                        annotated_diff=clean_annotated_diff,
+                        annotated_diff=annotated_diff,
                         client=client,
                         valid_lines=valid_lines,
                         triage=triage,

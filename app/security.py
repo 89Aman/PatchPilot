@@ -95,14 +95,22 @@ def scan_diff_for_secrets(raw_diff: str) -> list[SecretFinding]:
     return findings
 
 
-def sanitize_diff_text(diff_text: str, findings: list[SecretFinding]) -> str:
-    """Sanitize secrets in the diff text before sending to LLM."""
-    sanitized = diff_text
-    for f in findings:
-        # Match any raw secret that produced this masked pattern
-        # Replace occurrences in the diff with the masked token
-        for _, pattern in SECRET_PATTERNS:
-            sanitized = pattern.sub(f"[REDACTED_{f.secret_type.upper().replace(' ', '_')}]", sanitized)
+_PRIVATE_KEY_BLOCK_RE = re.compile(
+    r"-----BEGIN (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----.*?"
+    r"(?:-----END (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----|\Z)",
+    re.DOTALL,
+)
+
+
+def sanitize_diff_text(diff_text: str, findings: list[SecretFinding] | None = None) -> str:
+    """Redact known patterns regardless of added-line findings, once per pattern.
+
+    Findings remain accepted for caller compatibility; context and deleted lines
+    also need redaction even when no newly added secret was reported.
+    """
+    sanitized = _PRIVATE_KEY_BLOCK_RE.sub("[REDACTED_PRIVATE_ENCRYPTION_KEY]", diff_text)
+    for secret_type, pattern in SECRET_PATTERNS:
+        sanitized = pattern.sub(f"[REDACTED_{secret_type.upper().replace(' ', '_')}]", sanitized)
     return sanitized
 
 

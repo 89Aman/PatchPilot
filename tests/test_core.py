@@ -483,7 +483,7 @@ def test_clerk_auth_helpers():
 
 
 @pytest.mark.asyncio
-async def test_clerk_endpoints():
+async def test_clerk_endpoints(monkeypatch):
     """Verify Clerk config, session exchange, and bearer token authorization."""
     import time
     import jwt
@@ -507,6 +507,10 @@ async def test_clerk_endpoints():
             "iat": now,
         }
         mock_token = jwt.encode(token_payload, "mock-clerk-secret-32-bytes-long!", algorithm="HS256")
+        from unittest.mock import AsyncMock
+        from app.config import settings
+        monkeypatch.setattr("app.main.verify_clerk_token", AsyncMock(return_value=token_payload))
+        monkeypatch.setattr(settings, "CLERK_SECRET_KEY", "")
 
         # Session exchange endpoint
         res_sess = await client.post(
@@ -515,7 +519,7 @@ async def test_clerk_endpoints():
         )
         assert res_sess.status_code == 200
         assert res_sess.json()["status"] == "ok"
-        assert res_sess.json()["user"]["login"] == "clerkuser"
+        assert res_sess.json()["user"]["login"] == "user_testclerk"
         assert "patchpilot_session" in res_sess.cookies
 
         # Auth me with Clerk Bearer token
@@ -523,16 +527,16 @@ async def test_clerk_endpoints():
         assert res_me.status_code == 200
         data_me = res_me.json()
         assert data_me["logged_in"] is True
-        assert data_me["user"]["login"] == "clerkuser"
+        assert data_me["user"]["login"] == "user_testclerk"
         assert data_me["provider"] == "clerk"
 
         # Access vault with Clerk Bearer token matching owner
         res_vault = await client.get(
-            "/vault/clerkuser",
+            "/vault/user_testclerk",
             headers={"Authorization": f"Bearer {mock_token}"},
         )
         assert res_vault.status_code == 200
-        assert res_vault.json()["owner"] == "clerkuser"
+        assert res_vault.json()["owner"] == "user_testclerk"
 
         # Access vault with Clerk Bearer token mismatching owner
         res_vault_mismatch = await client.get(
@@ -560,6 +564,10 @@ async def test_clerk_then_github_connect_flow(monkeypatch):
             "iat": now,
         }
         mock_token = jwt.encode(token_payload, "mock-clerk-secret-32-bytes-long!", algorithm="HS256")
+        from unittest.mock import AsyncMock
+        from app.config import settings
+        monkeypatch.setattr("app.main.verify_clerk_token", AsyncMock(return_value=token_payload))
+        monkeypatch.setattr(settings, "CLERK_SECRET_KEY", "")
 
         res_sess = await client.post(
             "/auth/clerk/session",

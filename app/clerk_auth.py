@@ -1,6 +1,6 @@
+import asyncio
 import base64
 import logging
-import time
 from typing import Any
 import httpx
 import jwt
@@ -152,10 +152,7 @@ async def fetch_clerk_oauth_token(
 
 
 async def verify_clerk_token(token: str, client: httpx.AsyncClient | None = None) -> dict[str, Any] | None:
-    """
-    Verify a Clerk session JWT token.
-    Attempts JWKS cryptographic verification if keys are available, with safe claim decoding fallback.
-    """
+    """Verify Clerk signatures and required claims; reject failures and outages."""
     if not token or not token.strip():
         return None
 
@@ -165,31 +162,28 @@ async def verify_clerk_token(token: str, client: httpx.AsyncClient | None = None
 
     settings = get_settings()
     jwks_url = get_clerk_jwks_url(settings)
+    domain = settings.clerk_frontend_api or derive_frontend_api(settings.clerk_publishable_key)
+    issuer = f"https://{domain}" if domain else ""
+    if not issuer and settings.CLERK_JWKS_URL.endswith("/.well-known/jwks.json"):
+        issuer = settings.CLERK_JWKS_URL.removesuffix("/.well-known/jwks.json")
+    if not issuer:
+        return None
 
     # 1. Attempt verification via Clerk JWKS
     try:
         jwk_client = get_jwk_client(jwks_url)
-        signing_key = jwk_client.get_signing_key_from_jwt(cleaned_token)
+        # PyJWKClient performs synchronous network I/O on a cache miss.
+        signing_key = await asyncio.to_thread(jwk_client.get_signing_key_from_jwt, cleaned_token)
         payload = jwt.decode(
             cleaned_token,
             signing_key.key,
             algorithms=["RS256"],
-            options={"verify_exp": True},
+            issuer=issuer,
+            options={"verify_exp": True, "require": ["exp", "iss", "sub"]},
         )
-        return payload
+        return payload if payload.get("sub") else None
     except Exception as jwks_err:
-        logger.debug("JWKS verification failed or skipped: %s", jwks_err)
-
-    # 2. Fallback: inspect token claims (for mock testing or when network access to JWKS is restricted)
-    try:
-        unverified = jwt.decode(cleaned_token, options={"verify_signature": False, "verify_exp": False})
-        exp = unverified.get("exp")
-        if exp and exp < time.time() - 300:
-            logger.warning("Clerk token is expired: %s", exp)
-            return None
-        return unverified
-    except Exception as decode_err:
-        logger.warning("Invalid token format: %s", decode_err)
+        logger.debug("Clerk verification failed: %s", type(jwks_err).__name__)
         return None
 
 
