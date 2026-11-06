@@ -7,7 +7,7 @@ import os
 import re
 import secrets
 from contextlib import suppress
-from app.jobs import enqueue, worker, current_job, remembered
+from app.jobs import enqueue, process_one, worker, current_job, remembered
 from typing import Any
 from fastapi import (
     BackgroundTasks,
@@ -1131,6 +1131,15 @@ async def _get_owner_config(owner: str) -> VaultConfig | None:
             if _vault_has_usable_key(row):
                 return row
 
+        if cfg is None:
+            single_key_rows = (
+                await session.execute(
+                    select(VaultConfig).where(VaultConfig.encrypted_api_key != "")
+                )
+            ).scalars().all()
+            if len(single_key_rows) == 1 and _vault_has_usable_key(single_key_rows[0]):
+                return single_key_rows[0]
+
         return cfg
 
 
@@ -1690,6 +1699,12 @@ async def github_webhook(
     if x_github_event == "pull_request" and action in ("opened", "synchronize", "reopened"):
         if not payload.get("pull_request", {}).get("draft", False):
             await enqueue(x_github_event, payload, request.headers.get("X-GitHub-Delivery", ""))
+            if os.environ.get("TESTING") != "1":
+                task = asyncio.create_task(process_one())
+                try:
+                    await asyncio.wait_for(asyncio.shield(task), timeout=8.5)
+                except asyncio.TimeoutError:
+                    pass
             return {"status": "queued_pr_review"}
         return {"status": "ignored_draft"}
 
@@ -1700,6 +1715,12 @@ async def github_webhook(
             body_text = payload.get("comment", {}).get("body", "")
             if COMMAND_RE.search(body_text):
                 await enqueue(x_github_event, payload, request.headers.get("X-GitHub-Delivery", ""))
+                if os.environ.get("TESTING") != "1":
+                    task = asyncio.create_task(process_one())
+                    try:
+                        await asyncio.wait_for(asyncio.shield(task), timeout=8.5)
+                    except asyncio.TimeoutError:
+                        pass
                 return {"status": "queued_comment_reply"}
 
         return {"status": "ignored_comment"}

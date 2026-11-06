@@ -12,11 +12,12 @@ All API replicas must use the same PostgreSQL database and encryption key.
 Budgets are shared across instances: 25 newly processed jobs per repository per
 hour. Unauthorized jobs do not consume the budget; retries do not reserve again.
 
-Cloud Run must allocate CPU outside requests for the polling worker. The checked-in
-Cloud Build deployment enables `--no-cpu-throttling --min-instances 1`. This changes
-billing: an instance remains running between requests. Existing deployments must
-apply these flags when deploying this change. Docker Compose already runs a
-persistent process and does not need a separate worker service.
+Cloud Run allocates CPU outside requests while instances are active via
+`--no-cpu-throttling`, while `--min-instances 0` allows idle instances to scale
+to zero for cost efficiency. Each incoming webhook enqueues the job and kicks off
+an immediate worker cycle before returning, while the background worker loop
+drains any remaining or retried jobs while the instance is warm. Docker Compose
+already runs a persistent process and does not need a separate worker service.
 
 Monitor jobs with status `failed`, `rate_limited`, and expired `running` leases.
 After fixing a provider/configuration failure, a new maintainer comment creates a

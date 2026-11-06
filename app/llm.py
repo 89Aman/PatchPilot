@@ -658,7 +658,10 @@ async def run_pr_review(
                 if not isinstance(data, dict) or data.get("_parse_error") or not isinstance(data.get("findings"), list) or data.get("verdict") not in {"PASS", "WARN", "BLOCK"}:
                     raise ValueError("Invalid review response schema")
                 raw_findings = data["findings"]
-                if any(not isinstance(f, dict) or not isinstance(f.get("line"), int) or not f.get("file") for f in raw_findings):
+                for f in raw_findings:
+                    if isinstance(f, dict) and isinstance(f.get("line"), str) and f["line"].strip().isdigit():
+                        f["line"] = int(f["line"].strip())
+                if any(not isinstance(f, dict) or isinstance(f.get("line"), bool) or not isinstance(f.get("line"), int) or not f.get("file") for f in raw_findings):
                     raise ValueError("Invalid review finding")
                 clean_findings: list[dict[str, Any]] = []
 

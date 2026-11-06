@@ -45,7 +45,7 @@ steps:
       - "--allow-unauthenticated"
       - "--no-cpu-throttling"
       - "--min-instances"
-      - "1"
+      - "0"
       - "--port"
       - "8080"
 
