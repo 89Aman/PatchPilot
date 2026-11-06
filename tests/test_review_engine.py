@@ -94,27 +94,27 @@ def test_build_review_summary_card_coderabbit_elements():
     assert "**Requested by:** @89Aman" in card
     assert "`2-Pass Fact-Checked`" in card
     # Check poem
-    assert "Data streams in morning light" in card
+    assert "Data streams in morning light" not in card
     # Check review checks matrix (emojis stripped)
-    assert "Review Checks" in card
-    assert "**Security**" in card
-    assert "**Performance**" in card
+    assert "Actionable findings" in card
+    assert "Source:" in card
+    assert "Findings:" in card
     assert "🛡️" not in card
     assert "⚡" not in card
     assert "🟢" not in card
     # Check collapsible walkthrough table & Mermaid architecture diagram
-    assert "File Walkthrough &amp; Architecture Flow" in card
+    assert "Architecture diagram" in card
     assert "```mermaid" in card
     assert "flowchart LR" in card
-    assert "`app/pipeline.py`" in card
+    assert "app/pipeline.py" in card
     assert "Optimized memory buffers" in card
     # Check verified findings section and Prompt for AI Agents
-    assert "### Verified Findings" in card
+    assert "### Actionable findings" in card
     assert "Unbounded buffer growth" in card
-    assert "Prompt for AI Agents" in card
+    assert "Suggested agent prompt" in card
     assert "deque(maxlen=1024)" in card
     # Check suggested unit tests
-    assert "Suggested Unit Tests (1)" in card
+    assert "Suggested tests (not executed)" in card
     assert "def test_eof_flush" in card
 
 

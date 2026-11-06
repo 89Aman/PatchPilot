@@ -33,9 +33,9 @@ def strip_emojis(text: str) -> str:
     if not text:
         return ""
     cleaned = _EMOJI_RE.sub("", text)
-    cleaned = re.sub(r"\|\s{2,}", "| ", cleaned)
-    cleaned = re.sub(r"(#+\s+)\s+", r"\1", cleaned)
-    cleaned = re.sub(r"(>\s+)\s+", r"\1", cleaned)
+    cleaned = re.sub(r"\|[ \t]{2,}", "| ", cleaned)
+    cleaned = re.sub(r"(#+[ \t]+)[ \t]+", r"\1", cleaned)
+    cleaned = re.sub(r"(>[ \t]+)[ \t]+", r"\1", cleaned)
     cleaned = re.sub(r"\*\*([^\*\n]+?)\*\*", lambda m: f"**{m.group(1).strip()}**", cleaned)
     return cleaned
 
@@ -521,173 +521,10 @@ def build_review_summary_card(
     findings: list[dict[str, Any]] | None = None,
     verification_status: str | None = None,
     architecture_diagram: str | None = None,
+    repo_full_name: str | None = None,
 ) -> str:
-    """Generate clean, emoji-free CodeRabbit-grade PatchPilot Markdown summary card."""
-    verdict_clean = strip_emojis(verdict).upper().strip() or "PASS"
-    sha_short = commit_sha[:7] if commit_sha else "HEAD"
-
-    user_tag_part = ""
-    if requested_by and requested_by.strip():
-        clean_user = requested_by.strip().lstrip("@")
-        user_tag_part = f"**Requested by:** @{clean_user} &nbsp;|&nbsp; "
-
-    verif_part = ""
-    if verification_status and verification_status.strip():
-        verif_part = f" &nbsp;|&nbsp; **Verification:** `{strip_emojis(verification_status).strip()}`"
-
-    # Failover Alert Notice (if review was completed via fallback provider)
-    failover_notice = ""
-    if fallback_used:
-        cand_provider = str(fallback_used.get("provider", "")).capitalize()
-        cand_model = fallback_used.get("model", "")
-        primary_reason = fallback_used.get("primary_reason", "Provider rate limit or outage")
-        failover_notice = (
-            f"> **Failover Alert**: Primary LLM returned *{primary_reason}*. "
-            f"Review successfully completed via fallback: **{cand_provider}** (`{cand_model}`).\n\n"
-        )
-
-    # Optional Poem Banner
-    poem_section = ""
-    if poem and poem.strip():
-        poem_clean = "\n".join(f"> *{strip_emojis(line).strip()}*" for line in poem.strip().splitlines() if strip_emojis(line).strip())
-        if poem_clean:
-            poem_section = f"{poem_clean}\n\n"
-
-    triage_section = ""
-    if triage_summary:
-        triage_section = f"### Triage & Impact\n\n{strip_emojis(triage_summary).strip()}\n\n"
-
-    # Review Checks Matrix Badges
-    checks_dict = review_checks or agent_statuses
-    checks_section = ""
-    if checks_dict:
-        rows = [
-            f"| **{strip_emojis(str(category)).strip()}** | {strip_emojis(str(status)).strip()} |"
-            for category, status in checks_dict.items()
-        ]
-        checks_section = (
-            "### Review Checks\n\n"
-            "| Category | Status |\n"
-            "| :--- | :--- |\n"
-            + "\n".join(rows)
-            + "\n\n"
-        )
-
-    # File Walkthrough & Architecture Diagram Section
-    walkthrough_section = ""
-    diagram_block = ""
-    if architecture_diagram and architecture_diagram.strip():
-        raw_diag = strip_emojis(architecture_diagram).strip()
-        if raw_diag.startswith("```"):
-            diagram_block = f"{raw_diag}\n\n"
-        else:
-            diagram_block = f"```mermaid\n{raw_diag}\n```\n\n"
-
-    wt_table = ""
-    if walkthrough:
-        wt_rows = [
-            f"| `{item.get('file', '')}` | {strip_emojis(str(item.get('impact', 'Refactor'))).strip() or 'Refactor'} | {strip_emojis(str(item.get('summary', ''))).strip()} |"
-            for item in walkthrough
-            if item.get("file")
-        ]
-        if wt_rows:
-            wt_table = (
-                "| File | Impact | Summary |\n"
-                "| :--- | :--- | :--- |\n"
-                + "\n".join(wt_rows)
-                + "\n\n"
-            )
-
-    if wt_table or diagram_block:
-        walkthrough_section = (
-            "### Changes Walkthrough\n\n"
-            "<details open>\n"
-            "<summary><b>File Walkthrough &amp; Architecture Flow</b></summary>\n\n"
-            f"{diagram_block}"
-            f"{wt_table}"
-            "</details>\n\n"
-        )
-
-    # Verified Findings Detail Section with Prompt for AI Agents
-    verified_findings_section = ""
-    if findings:
-        finding_blocks: list[str] = []
-        for idx, f in enumerate(findings, 1):
-            if not isinstance(f, dict):
-                continue
-            f_file = f.get("file", "unknown")
-            f_line = f.get("line", "")
-            f_sev = strip_emojis(str(f.get("severity", "risk"))).upper().strip() or "RISK"
-            f_title = strip_emojis(str(f.get("title", "Issue Detected"))).strip()
-            f_exp = strip_emojis(str(f.get("explanation") or f.get("comment") or "")).strip()
-            f_sug = str(f.get("suggestion", "")).strip()
-            line_ref = f" (Line {f_line})" if f_line else ""
-            block = f"#### {idx}. [{f_sev}] `{f_file}`{line_ref} — {f_title}\n\n{f_exp}"
-            if f_sug:
-                block += f"\n\n```suggestion\n{f_sug}\n```"
-            agent_prompt = _build_agent_prompt_for_finding(f)
-            block += (
-                "\n\n<details>\n"
-                "<summary><b>Prompt for AI Agents</b></summary>\n\n"
-                f"```text\n{agent_prompt}\n```\n\n"
-                "</details>"
-            )
-            finding_blocks.append(block)
-        if finding_blocks:
-            verified_findings_section = (
-                "### Verified Findings\n\n"
-                + "\n\n---\n\n".join(finding_blocks)
-                + "\n\n"
-            )
-
-    security_status = (
-        f"| Secret Alerts | **{secret_alerts_count} (CRITICAL)** |\n"
-        if secret_alerts_count > 0
-        else "| Secret Scan | Clean (0 exposed keys) |\n"
-    )
-
-    findings_section = (
-        f"### Findings Breakdown\n\n"
-        f"| Category | Status / Count |\n"
-        f"| :--- | :--- |\n"
-        f"{security_status}"
-        f"| Bugs | {bug_count} |\n"
-        f"| Risks | {risk_count} |\n"
-        f"| Nits | {nit_count} |\n\n"
-    )
-
-    # Suggested Unit Tests Section
-    tests_section = ""
-    if suggested_tests:
-        test_blocks = []
-        for idx, st in enumerate(suggested_tests, 1):
-            target = strip_emojis(str(st.get("target_file", "Test"))).strip()
-            desc = strip_emojis(str(st.get("description", "Suggested edge-case test"))).strip()
-            code = str(st.get("code_snippet", "")).strip()
-            test_blocks.append(f"**Test {idx} ({target})**: {desc}\n```python\n{code}\n```")
-        tests_section = (
-            "<details>\n"
-            f"<summary><b>Suggested Unit Tests ({len(suggested_tests)})</b></summary>\n\n"
-            + "\n\n".join(test_blocks)
-            + "\n\n</details>\n"
-        )
-
-    card_body = (
-        f"<!-- patchpilot-ai-review -->\n"
-        f"## PatchPilot AI PR Review\n\n"
-        f"{user_tag_part}**Verdict:** `{verdict_clean}` &nbsp;|&nbsp; **Commit:** `{sha_short}`{verif_part}\n\n"
-        f"{failover_notice}"
-        f"{poem_section}"
-        f"{triage_section}"
-        f"### Executive Summary\n\n"
-        f"{strip_emojis(summary).strip()}\n\n"
-        f"{checks_section}"
-        f"{walkthrough_section}"
-        f"{verified_findings_section}"
-        f"{findings_section}"
-        f"{tests_section}"
-    )
-    return strip_emojis(card_body)
+    from app.review_format import render_review
+    return render_review(locals())
 
 
 async def publish_pr_review(
@@ -704,6 +541,8 @@ async def publish_pr_review(
     existing_review: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Publish native GitHub review with emoji-free summary card, in-place loading card replacement, and verified inline comments."""
+    from app.review_format import finalize_review
+    finalize_review(review_data)
     summary = review_data.get("summary", "Review completed.")
     verdict = review_data.get("verdict", "PASS")
     findings = review_data.get("findings", [])
@@ -739,6 +578,7 @@ async def publish_pr_review(
         findings=findings,
         verification_status=verification_status,
         architecture_diagram=architecture_diagram,
+        repo_full_name=repo_full_name,
     )
 
     comments: list[dict[str, Any]] = []
@@ -774,7 +614,7 @@ async def publish_pr_review(
             "path": file_path,
             "line": int(line),
             "side": "RIGHT",
-            "body": strip_emojis(comment_body),
+            "body": comment_body,
         })
 
     close_client = False

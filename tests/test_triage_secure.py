@@ -49,7 +49,7 @@ def test_secret_scanner_detection():
 
     for f in findings:
         assert f.file_path == "app/config.py"
-        assert f.severity == "CRITICAL"
+        assert f.severity == ("POTENTIAL" if f.secret_type == "Private Encryption Key" else "CRITICAL")
         assert "*" in f.matched_text_masked
 
 
@@ -174,10 +174,10 @@ def test_build_review_summary_card_with_triage_and_security():
         secret_alerts_count=0,
     )
     assert "PatchPilot AI PR Review" in card
-    assert "### Triage & Impact" in card
+    assert "Triage & Impact" in card
     assert "`size:S`" in card
-    assert "Secret Scan" in card
-    assert "Clean (0 exposed keys)" in card
+    assert "0 scanner alerts" in card
+    assert "Clean (0 exposed keys)" not in card
 
     # Test alert status when secrets detected
     card_alert = build_review_summary_card(
@@ -189,5 +189,5 @@ def test_build_review_summary_card_with_triage_and_security():
         nit_count=0,
         secret_alerts_count=1,
     )
-    assert "Secret Alerts" in card_alert
-    assert "**1 (CRITICAL)**" in card_alert
+    assert "1 scanner alerts" in card_alert
+    assert "`BLOCK`" in card_alert

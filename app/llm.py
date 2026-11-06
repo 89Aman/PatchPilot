@@ -473,6 +473,7 @@ async def _verify_findings_with_llm(
 
     verify_system_prompt = (
         "You are PatchPilot Verification Engine, a strict second-pass code review fact-checker.\n"
+        "Redaction placeholders are transport substitutions, never original source. Do not infer bugs from them.\n"
         "Your job is to verify each candidate finding against the annotated diff and eliminate any false positives.\n\n"
         "Verification Rules:\n"
         "1. Check whether the reported issue is genuinely present in the added (`+`) or modified lines of the diff.\n"
@@ -548,6 +549,14 @@ async def run_pr_review(
 ) -> dict[str, Any]:
     """Execute unified 2-pass AI review of pull request with fact-checked findings, architecture diagram, walkthrough, and test stubs."""
     # Apply the privacy boundary to all prompt fields, including context/deletions.
+    redacted_locations = set()
+    active_file = None
+    for raw_line in annotated_diff.splitlines():
+        if raw_line.startswith("--- ") and raw_line.endswith(" ---"):
+            active_file = raw_line[4:-4]
+        match = re.match(r"\[L(\d+)\]", raw_line)
+        if match and sanitize_diff_text(raw_line) != raw_line:
+            redacted_locations.add((active_file, int(match.group(1))))
     annotated_diff = budget_text(sanitize_diff_text(annotated_diff), 32000)
     if valid_lines is not None:
         shown = visible_lines(annotated_diff)
@@ -559,6 +568,7 @@ async def run_pr_review(
     system_prompt = (
         "You are PatchPilot, an expert pull request analysis and verification engine modeled after CodeRabbit.\n"
         f"{policy_section}\n\n"
+        "Redaction placeholders are transport substitutions, never original source. Do not infer bugs from them.\n"
         "Analyze the pull request thoroughly across:\n"
         "1. State-Machine & Idempotency Correctness (missing state/status guards before mutations, double-release or duplicate timeline appends on retry).\n"
         "2. Backend & Data-Layer Consistency (accessing private/mock state like `_mock_*` that fails in production DB mode, mutating Pydantic models without validation).\n"
@@ -674,8 +684,12 @@ async def run_pr_review(
                     if not file_path or line is None:
                         continue
 
+                    if (str(file_path), int(line)) in redacted_locations:
+                        continue
                     title_str = strip_emojis(str(f.get("title", ""))).strip()
                     exp_str = strip_emojis(str(f.get("explanation", ""))).strip()
+                    if "[REDACTED_" in exp_str or "[REDACTED_" in str(f.get("suggestion", "")):
+                        continue
                     if "truncated" in title_str.lower() and "omitted" in annotated_diff:
                         continue
 
@@ -720,6 +734,8 @@ async def run_pr_review(
                         if not fp or ln is None:
                             continue
                         ln_int = int(ln)
+                        if (str(fp), ln_int) in redacted_locations:
+                            continue
                         if valid_lines is not None:
                             v_set = valid_lines.get(str(fp), set())
                             if not v_set:
@@ -734,8 +750,12 @@ async def run_pr_review(
                         final_findings.append(vf)
                     clean_findings = final_findings
 
+                for finding in clean_findings:
+                    finding["source"] = "llm"
                 data["findings"] = clean_findings
                 data["summary"] = strip_emojis(str(data.get("summary", "Review completed."))).strip()
+                if redacted_locations:
+                    data["summary"] += " Redacted locations were excluded from source-dependent analysis."
                 if data.get("poem"):
                     data["poem"] = strip_emojis(str(data["poem"])).strip()
                 if data.get("architecture_diagram"):
@@ -763,8 +783,8 @@ async def run_pr_review(
                 checks = {
                     "Security": "Clean" if not any("security" in f["title"].lower() or "secret" in f["title"].lower() for f in clean_findings) else "Issues Found",
                     "Correctness": f"{bugs} Defect{'s' if bugs > 1 else ''}" if bugs > 0 else "Clean",
-                    "Performance": "Review Needed" if any("perf" in f["title"].lower() or "o(n" in f["title"].lower() for f in clean_findings) else "Optimal",
-                    "Test Coverage": f"{len(suggested_tests)} Test Case{'s' if len(suggested_tests) > 1 else ''} Suggested" if suggested_tests else "Adequate",
+                    "Performance": "Review Needed" if any("perf" in f["title"].lower() or "o(n" in f["title"].lower() for f in clean_findings) else "No performance finding reported",
+                    "Test Coverage": f"{len(suggested_tests)} Test Case{'s' if len(suggested_tests) > 1 else ''} Suggested" if suggested_tests else "Coverage not measured",
                 }
                 data["review_checks"] = checks
                 data["agent_statuses"] = checks  # Backward compatibility alias

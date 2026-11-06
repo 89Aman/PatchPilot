@@ -216,9 +216,9 @@ def test_build_review_summary_card():
     assert "**Verdict:** `WARN`" in card
     assert "**Commit:** `a1b2c3d`" in card
     assert "Found 1 risk and 2 minor nits." in card
-    assert "| Bugs | 0 |" in card
-    assert "| Risks | 1 |" in card
-    assert "| Nits | 2 |" in card
+    assert "0 bugs" in card
+    assert "1 risks" in card
+    assert "2 nits" in card
 
 
 def test_get_provider_endpoint():

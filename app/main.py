@@ -1320,6 +1320,8 @@ async def handle_pr_event(payload: dict[str, Any]) -> None:
                         "line": sf.line_number,
                         "severity": "bug",
                         "title": f"Secret Leak Detected: {sf.secret_type}",
+                                "source": "scanner",
+                                "confidence": sf.severity,
                         "explanation": remediation_msg,
                         "comment": remediation_msg,
                     })
@@ -1549,6 +1551,8 @@ async def handle_comment_event(event_type: str, payload: dict[str, Any]) -> None
                                 "line": sf.line_number,
                                 "severity": "bug",
                                 "title": f"Secret Leak Detected: {sf.secret_type}",
+                                "source": "scanner",
+                                "confidence": sf.severity,
                                 "explanation": remediation_msg,
                                 "comment": remediation_msg,
                             })
@@ -1669,8 +1673,6 @@ async def handle_comment_event(event_type: str, payload: dict[str, Any]) -> None
             await complete_check_indicator(token, repo_full_name, check_handle, verdict="ERROR", summary_text="Review failed; queued jobs retry automatically.")
             if pending_review:
                 await update_pr_review_card(token, repo_full_name, pr_number, pending_review, "PatchPilot could not complete this review. The job will retry within its retry budget.")
-        if current_job.get() is not None:
-            raise
 
 
 # -----------------------------------------------------------------------------
