@@ -1,5 +1,6 @@
 """Regressions found while rechecking open issues after PR #11."""
 import asyncio
+from email.utils import formatdate
 import json
 from unittest.mock import AsyncMock
 
@@ -117,6 +118,24 @@ def test_retry_policy_honors_http_failure_type(status, headers, minimum):
     error = httpx.HTTPStatusError("failure", request=response.request, response=response)
     delay = jobs.retry_delay(error, 1)
     assert delay is None if minimum is None else delay >= minimum
+
+
+@pytest.mark.parametrize("status", [403, 429, 503])
+@pytest.mark.parametrize("offset", [600, 5, -600])
+def test_retry_policy_honors_http_date(monkeypatch, status, offset):
+    now = 1800000000.0
+    monkeypatch.setattr(jobs.time, "time", lambda: now)
+    response = httpx.Response(status, headers={"retry-after": formatdate(now + offset, usegmt=True)}, request=httpx.Request("POST", "https://api.github.com/test"))
+    error = httpx.HTTPStatusError("failure", request=response.request, response=response)
+    assert jobs.retry_delay(error, 1) == max(60 if status in (403, 429) else 20, offset)
+
+
+def test_invalid_retry_date_preserves_reset_delay(monkeypatch):
+    now = 1800000000.0
+    monkeypatch.setattr(jobs.time, "time", lambda: now)
+    response = httpx.Response(503, headers={"retry-after": "invalid", "x-ratelimit-reset": str(now + 120)}, request=httpx.Request("POST", "https://api.github.com/test"))
+    error = httpx.HTTPStatusError("failure", request=response.request, response=response)
+    assert jobs.retry_delay(error, 1) == 120
 
 
 async def test_retry_reserves_shared_budget_only_once(queue, monkeypatch):

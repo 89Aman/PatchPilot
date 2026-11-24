@@ -1,6 +1,8 @@
 """Durable, encrypted webhook queue with leases and bounded retries."""
 import asyncio
 from contextvars import ContextVar
+from datetime import timezone
+from email.utils import parsedate_to_datetime
 import hashlib
 import json
 import logging
@@ -93,11 +95,19 @@ def retry_delay(exc, attempts):
             return None
         if limited:
             delay = max(60, delay)
-        for name, offset in (("retry-after", 0), ("x-ratelimit-reset", time.time())):
+        now = time.time()
+        for name, offset in (("retry-after", 0), ("x-ratelimit-reset", now)):
             try:
                 delay = max(delay, float(response.headers[name]) - offset)
             except (KeyError, ValueError):
-                pass
+                if name == "retry-after" and name in response.headers:
+                    try:
+                        retry_at = parsedate_to_datetime(response.headers[name])
+                        if retry_at.tzinfo is None:
+                            retry_at = retry_at.replace(tzinfo=timezone.utc)
+                        delay = max(delay, retry_at.timestamp() - now)
+                    except (TypeError, ValueError, OverflowError):
+                        pass
     return delay
 
 async def enqueue(event, payload, delivery=""):
