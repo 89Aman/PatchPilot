@@ -88,12 +88,15 @@ class Settings(BaseSettings):
     @classmethod
     def validate_master_key(cls, v: str) -> str:
         cleaned = v.strip()
+        hint = 'Generate one with: python -c "import secrets; print(secrets.token_hex(32))"'
         if len(cleaned) != 64:
-            raise ValueError(f"MASTER_ENCRYPTION_KEY must be a 64-character hex string (got length {len(cleaned)})")
+            raise ValueError(
+                f"MASTER_ENCRYPTION_KEY must be a 64-character hex string (got length {len(cleaned)}). {hint}"
+            )
         try:
             bytes.fromhex(cleaned)
         except ValueError as err:
-            raise ValueError("MASTER_ENCRYPTION_KEY must be a valid hexadecimal string") from err
+            raise ValueError(f"MASTER_ENCRYPTION_KEY must be a valid hexadecimal string. {hint}") from err
         return cleaned
 
     @field_validator("GITHUB_PRIVATE_KEY")

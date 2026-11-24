@@ -4,6 +4,7 @@ import hashlib
 import hmac
 import httpx
 import pytest
+from app.config import Settings
 from app.crypto import decrypt_secret, encrypt_secret
 from app.github_auth import (
     build_review_summary_card,
@@ -69,6 +70,31 @@ def test_crypto_corrupted_token():
     # Too short
     with pytest.raises(ValueError):
         decrypt_secret("aGVsbG8=", master_key_hex=test_key)
+
+
+@pytest.mark.parametrize(
+    ("key", "message"),
+    [
+        ("too-short", "must be a 64-character hex string (got length 9)"),
+        ("z" * 64, "must be a valid hexadecimal string"),
+    ],
+)
+def test_invalid_master_key_includes_generation_hint(key, message):
+    with pytest.raises(ValueError) as exc_info:
+        Settings(MASTER_ENCRYPTION_KEY=key, _env_file=None)
+
+    error = str(exc_info.value)
+    assert message in error
+    assert 'Generate one with: python -c "import secrets; print(secrets.token_hex(32))"' in error
+
+
+@pytest.mark.parametrize(
+    "key",
+    ["0123456789abcdef" * 4, "0123456789ABCDEF" * 4, "  " + "0123456789abcdef" * 4 + "\n"],
+)
+def test_valid_master_key_preserves_trimmed_value(key):
+    settings = Settings(MASTER_ENCRYPTION_KEY=key, _env_file=None)
+    assert settings.MASTER_ENCRYPTION_KEY == key.strip()
 
 
 # -----------------------------------------------------------------------------
