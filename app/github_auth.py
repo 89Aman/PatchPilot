@@ -457,7 +457,7 @@ async def complete_check_indicator(
         check_run_id = check_handle.get("check_run_id")
         if check_run_id:
             check_url = f"https://api.github.com/repos/{repo_full_name}/check-runs/{check_run_id}"
-            await client.patch(
+            response = await client.patch(
                 check_url,
                 headers=headers,
                 json={
@@ -470,10 +470,12 @@ async def complete_check_indicator(
                     },
                 },
             )
+            if response.is_error:
+                response.raise_for_status()
 
         if check_handle.get("status_active"):
             status_url = f"https://api.github.com/repos/{repo_full_name}/statuses/{head_sha}"
-            await client.post(
+            response = await client.post(
                 status_url,
                 headers=headers,
                 json={
@@ -482,8 +484,8 @@ async def complete_check_indicator(
                     "description": clean_title[:135],
                 },
             )
-    except Exception as exc:
-        logger.debug("Check indicator completion skipped on %s: %s", repo_full_name, exc)
+            if response.is_error:
+                response.raise_for_status()
     finally:
         if close_client:
             await client.aclose()
@@ -829,8 +831,12 @@ async def publish_pr_review(
             payload["comments"] = comments
 
         response = await client.post(url, headers=headers, json=payload)
+        summary_only = False
         if response.status_code == 422:
             logger.warning("GitHub 422 for review event %s. Retrying with COMMENT event for %s#%s", review_event, repo_full_name, pr_number)
+            summary_only = bool(comments)
+            if summary_only:
+                summary_card += "\n\nInline placement failed; all findings are preserved in this summary."
             fallback_payload: dict[str, Any] = {
                 "body": summary_card,
                 "event": "COMMENT",
@@ -841,7 +847,7 @@ async def publish_pr_review(
 
         if response.status_code == 422:
             logger.warning("GitHub 422 on pulls/reviews (e.g. closed/merged PR). Falling back to issue comment for %s#%s", repo_full_name, pr_number)
-            return await post_comment_reply(
+            fallback = await post_comment_reply(
                 token=token,
                 repo_full_name=repo_full_name,
                 pr_number=pr_number,
@@ -849,9 +855,13 @@ async def publish_pr_review(
                 review_comment_id=None,
                 client=client,
             )
+            return {**fallback, "status": "summary_only"}
 
         response.raise_for_status()
-        return response.json()
+        result = response.json()
+        if summary_only:
+            result["status"] = "summary_only"
+        return result
     finally:
         if close_client:
             await client.aclose()

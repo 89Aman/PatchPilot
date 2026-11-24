@@ -45,7 +45,7 @@ steps:
       - "--allow-unauthenticated"
       - "--no-cpu-throttling"
       - "--min-instances"
-      - "0"
+      - "${_MIN_INSTANCES}"
       - "--port"
       - "8080"
 
@@ -56,6 +56,8 @@ images:
 substitutions:
   _SERVICE_NAME: "patchpilot"
   _REGION: "europe-west1"
+  # SQL polling cannot wake a service that has scaled to zero.
+  _MIN_INSTANCES: "1"
 
 options:
   logging: CLOUD_LOGGING_ONLY
