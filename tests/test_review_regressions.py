@@ -137,7 +137,8 @@ async def test_comment_shares_automatic_review_budget(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_oauth_callback_requires_browser_state(monkeypatch):
+@pytest.mark.parametrize("callback", ["/auth/callback", "/auth/github/callback"])
+async def test_oauth_callback_requires_browser_state(monkeypatch, callback):
     monkeypatch.setattr(settings, "GITHUB_CLIENT_ID", "test-client")
     monkeypatch.setattr(settings, "GITHUB_CLIENT_SECRET", "test-secret")
     exchange = AsyncMock(return_value="local-test-token")
@@ -145,16 +146,16 @@ async def test_oauth_callback_requires_browser_state(monkeypatch):
     monkeypatch.setattr(main, "fetch_user_profile", AsyncMock(return_value={"login": "owner"}))
     monkeypatch.setattr(main, "_upsert_user_account", AsyncMock())
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=main.app), base_url="http://test") as client:
-        denied = await client.get("/auth/callback?code=test-code")
+        denied = await client.get(callback, params={"code": "test-code"})
         assert denied.status_code == 400
         exchange.assert_not_awaited()
         login = await client.get("/auth/login")
         from urllib.parse import parse_qs, urlparse
         state = parse_qs(urlparse(login.headers["location"]).query)["state"][0]
-        denied = await client.get("/auth/callback", params={"code": "test-code", "state": "wrong"})
+        denied = await client.get(callback, params={"code": "test-code", "state": "wrong"})
         assert denied.status_code == 400
         exchange.assert_not_awaited()
-        accepted = await client.get("/auth/github/callback", params={"code": "test-code", "state": state})
+        accepted = await client.get(callback, params={"code": "test-code", "state": state})
         assert accepted.status_code == 302
         exchange.assert_awaited_once()
         assert "patchpilot_oauth_state" not in client.cookies

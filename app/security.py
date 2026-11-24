@@ -108,7 +108,19 @@ def sanitize_diff_text(diff_text: str, findings: list[SecretFinding] | None = No
     Findings remain accepted for caller compatibility; context and deleted lines
     also need redaction even when no newly added secret was reported.
     """
-    sanitized = _PRIVATE_KEY_BLOCK_RE.sub("[REDACTED_PRIVATE_ENCRYPTION_KEY]", diff_text)
+    def redact_key_block(match: re.Match) -> str:
+        # Preserve diff line prefixes/counts so excerpting cannot detach a PEM
+        # body from its header or move subsequent GitHub line numbers.
+        result = []
+        for index, line in enumerate(match.group(0).splitlines(keepends=True)):
+            prefix = ""
+            if index:
+                prefix = re.match(r"(?:\[L\d+\] |\[DEL\] )?[ +\-]?", line).group(0)
+            ending = "\r\n" if line.endswith("\r\n") else "\n" if line.endswith("\n") else ""
+            result.append(prefix + "[REDACTED_PRIVATE_ENCRYPTION_KEY]" + ending)
+        return "".join(result)
+
+    sanitized = _PRIVATE_KEY_BLOCK_RE.sub(redact_key_block, diff_text)
     for secret_type, pattern in SECRET_PATTERNS:
         sanitized = pattern.sub(f"[REDACTED_{secret_type.upper().replace(' ', '_')}]", sanitized)
     return sanitized

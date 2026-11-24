@@ -78,38 +78,30 @@ def visible_lines(text: str) -> dict[str, set[int]]:
 
 
 def _excerpt_file_lines_safely(lines: list[str], budget_chars: int) -> str:
-    """Excerpt a file's annotated diff lines on complete line boundaries, preserving both head and tail hunks."""
-    full_text = "\n".join(lines)
-    if len(full_text) <= budget_chars:
-        return full_text
-
-    notice = "[... Middle lines of file diff omitted for context window budget; file is complete in repository ...]"
-    half_budget = max(400, (budget_chars - len(notice) - 4) // 2)
-
-    head_lines: list[str] = []
-    head_len = 0
-    for ln in lines:
-        if head_len + len(ln) + 1 > half_budget and head_lines:
-            break
-        head_lines.append(ln)
-        head_len += len(ln) + 1
-
-    tail_lines: list[str] = []
-    tail_len = 0
-    for ln in reversed(lines[len(head_lines):]):
-        if tail_len + len(ln) + 1 > half_budget and tail_lines:
-            break
-        tail_lines.append(ln)
-        tail_len += len(ln) + 1
-    tail_lines.reverse()
-
-    if not tail_lines:
-        return "\n".join(head_lines)
-    return "\n".join(head_lines + [notice] + tail_lines)
+    """Keep the file heading and complete head/tail lines within an exact budget."""
+    if len("\n".join(lines)) <= budget_chars:
+        return "\n".join(lines)
+    notice = "[Coverage limited: lines omitted]"
+    if budget_chars < len(notice):
+        return ""
+    selected: dict[int, str] = {}
+    remaining = budget_chars - len(notice)
+    # Alternate from both ends, skipping oversized lines rather than stopping.
+    order = []
+    for i in range((len(lines) + 1) // 2):
+        order.append(i)
+        if len(lines) - 1 - i != i:
+            order.append(len(lines) - 1 - i)
+    for i in order:
+        if len(lines[i]) + 1 <= remaining:
+            selected[i] = lines[i]
+            remaining -= len(lines[i]) + 1
+    return "\n".join([selected[i] for i in sorted(selected)] + [notice])
 
 
-def annotate_diff(raw_diff: str, max_chars: int = 48_000) -> tuple[str, dict[str, set[int]]]:
+def annotate_diff(raw_diff: str, max_chars: int = 32_000) -> tuple[str, dict[str, set[int]]]:
     """Parse unified diff, exclude noise files, annotate right-side line numbers, and budget across all files without mid-line cuts."""
+    raw_diff = sanitize_diff_text(raw_diff)
     valid_lines: dict[str, set[int]] = {}
     file_blocks: list[tuple[str | None, bool, list[str]]] = []
 
@@ -150,7 +142,8 @@ def annotate_diff(raw_diff: str, max_chars: int = 48_000) -> tuple[str, dict[str
                     current_lines.append(f"\n[File excluded as noise/lockfile: {current_file}]")
                 else:
                     valid_lines.setdefault(current_file, set())
-                    current_lines.append(f"\n--- {current_file} ---")
+                    if not any(ln == f"\n--- {current_file} ---" for ln in current_lines):
+                        current_lines.append(f"\n--- {current_file} ---")
             continue
 
         if skip_file:
@@ -183,48 +176,42 @@ def annotate_diff(raw_diff: str, max_chars: int = 48_000) -> tuple[str, dict[str
     if len(full_joined) <= max_chars:
         return full_joined, valid_lines
 
-    # Multi-file proportional allocation so no file is dropped or cut mid-line
-    active_indices = [i for i, (_, is_skip, _) in enumerate(file_blocks) if not is_skip]
-    if not active_indices:
-        return budget_text(full_joined, max_chars), {}
-
-    block_texts = ["\n".join(blk[2]) for blk in file_blocks]
-    remaining_budget = max_chars - sum(len(block_texts[i]) + 1 for i in range(len(file_blocks)) if i not in active_indices)
-    remaining_budget = max(2000, remaining_budget)
-
-    # First let small files take their exact size, then divide remaining budget among large files
-    allocations: dict[int, int] = {}
-    unallocated = list(active_indices)
-    while unallocated:
-        share = max(800, remaining_budget // len(unallocated))
-        fit_any = False
-        for idx in list(unallocated):
-            f_path = (file_blocks[idx][0] or "").lower()
-            is_doc = f_path.endswith((".md", ".txt", ".rst"))
-            effective_len = len(block_texts[idx])
-            doc_cap = max(1800, share // 2) if (is_doc and len(active_indices) > 2) else share
-            if effective_len <= doc_cap:
-                allocations[idx] = effective_len
-                remaining_budget -= effective_len
-                unallocated.remove(idx)
-                fit_any = True
-        if not fit_any:
-            for idx in unallocated:
-                f_path = (file_blocks[idx][0] or "").lower()
-                is_doc = f_path.endswith((".md", ".txt", ".rst"))
-                share = max(800, remaining_budget // len(unallocated))
-                allocations[idx] = max(1500, share // 2) if (is_doc and len(active_indices) > 2) else share
+    # Reserve separators and a coverage notice before sharing space across files.
+    notice = "[Coverage limited: file lines omitted]"
+    max_chars = max(0, max_chars)
+    if max_chars < len(notice):
+        return "", {}
+    remaining = max_chars - len(notice)
+    blocks = ["\n".join(block[2]).strip("\n") for block in file_blocks]
+    allocations = [0] * len(blocks)
+    pending = list(range(len(blocks)))
+    while pending:
+        share = max(0, remaining // len(pending) - 1)
+        fits = [i for i in pending if len(blocks[i]) <= share]
+        if not fits:
+            for i in pending:
+                allocations[i] = share
             break
+        for i in fits:
+            allocations[i] = len(blocks[i])
+            remaining -= len(blocks[i]) + 1
+            pending.remove(i)
 
-    out_blocks: list[str] = []
-    for i, (_, is_skip, lines) in enumerate(file_blocks):
-        if is_skip:
-            out_blocks.append("\n".join(lines))
+    out = []
+    for block, allocation in zip(blocks, allocations):
+        lines = block.splitlines()
+        # Retain a heading whenever any file content is included.
+        heading = lines[0] if lines else ""
+        if len(block) <= allocation:
+            excerpt = block
+        elif len(heading) + 1 <= allocation:
+            body = _excerpt_file_lines_safely(lines[1:], allocation - len(heading) - 1)
+            excerpt = heading + "\n" + body
         else:
-            budget = allocations.get(i, 3000)
-            out_blocks.append(_excerpt_file_lines_safely(lines, budget))
-
-    bounded = budget_text("\n".join(out_blocks), max_chars)
+            excerpt = ""
+        if excerpt:
+            out.append(excerpt)
+    bounded = "\n".join(out + [notice])
     return bounded, visible_lines(bounded)
 
 
@@ -265,6 +252,8 @@ def _resolve_endpoint_and_headers(cfg: VaultConfig) -> tuple[str, dict[str, str]
 
 def extract_json_payload(content: str) -> dict[str, Any]:
     """Extract and parse JSON object from LLM response text."""
+    if not isinstance(content, str):
+        raise ValueError("Invalid model response content")
     content_trimmed = content.strip()
     fence_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", content_trimmed, re.DOTALL)
     if fence_match:
@@ -459,6 +448,42 @@ async def test_llm_connection(
             await client.aclose()
 
 
+MAX_PROMPT_CHARS = 48_000
+
+
+def validate_findings(findings: Any) -> list[dict[str, Any]]:
+    if not isinstance(findings, list):
+        raise ValueError("Invalid findings list")
+    for finding in findings:
+        if not isinstance(finding, dict):
+            raise ValueError("Invalid review finding")
+        line = finding.get("line")
+        if isinstance(line, str) and line.strip().isdigit():
+            line = int(line.strip())
+        if type(line) is not int or line <= 0 or not isinstance(finding.get("file"), str) or not finding["file"].strip():
+            raise ValueError("Invalid finding location")
+        finding["line"] = line
+        for field in ("severity", "title", "explanation", "suggestion", "agent_prompt"):
+            if field in finding and not isinstance(finding[field], str):
+                raise ValueError("Invalid finding field type")
+        if finding.get("severity", "risk").lower().strip() not in {"bug", "risk", "nit"}:
+            raise ValueError("Invalid finding severity")
+    return findings
+
+
+def validate_review(data: Any) -> dict[str, Any]:
+    if not isinstance(data, dict) or data.get("_parse_error") or data.get("verdict") not in ("PASS", "WARN", "BLOCK"):
+        raise ValueError("Invalid review response schema")
+    validate_findings(data.get("findings"))
+    for field in ("summary", "poem", "architecture_diagram"):
+        if field in data and not isinstance(data[field], str):
+            raise ValueError("Invalid review text field")
+    for field in ("walkthrough", "suggested_tests"):
+        if field in data and (not isinstance(data[field], list) or any(not isinstance(row, dict) or any(not isinstance(value, str) for value in row.values()) for row in data[field])):
+            raise ValueError("Invalid review detail field")
+    return data
+
+
 async def _verify_findings_with_llm(
     client: httpx.AsyncClient,
     url: str,
@@ -509,12 +534,15 @@ async def _verify_findings_with_llm(
         ],
     }
 
+    if sum(len(message["content"]) for message in payload["messages"]) > MAX_PROMPT_CHARS:
+        raise ValueError("Verifier prompt exceeds budget; review is inconclusive")
+
     try:
         resp = await client.post(url, headers=headers, json=payload)
         resp.raise_for_status()
         content = resp.json()["choices"][0]["message"]["content"]
         parsed = extract_json_payload(content)
-        verified = parsed.get("verified_findings")
+        verified = validate_findings(parsed.get("verified_findings"))
         if isinstance(verified, list):
             if any(not isinstance(f, dict) or not f.get("file") or not isinstance(f.get("line"), int) for f in verified):
                 raise ValueError("Invalid verified finding")
@@ -655,14 +683,9 @@ async def run_pr_review(
                 content = resp.json()["choices"][0]["message"]["content"]
                 data = extract_json_payload(content)
 
-                if not isinstance(data, dict) or data.get("_parse_error") or not isinstance(data.get("findings"), list) or data.get("verdict") not in {"PASS", "WARN", "BLOCK"}:
-                    raise ValueError("Invalid review response schema")
+                validate_review(data)
                 raw_findings = data["findings"]
-                for f in raw_findings:
-                    if isinstance(f, dict) and isinstance(f.get("line"), str) and f["line"].strip().isdigit():
-                        f["line"] = int(f["line"].strip())
-                if any(not isinstance(f, dict) or isinstance(f.get("line"), bool) or not isinstance(f.get("line"), int) or not f.get("file") for f in raw_findings):
-                    raise ValueError("Invalid review finding")
+                unverified_findings = False
                 clean_findings: list[dict[str, Any]] = []
 
                 # Filter against valid lines to prevent hallucinated line comments
@@ -702,6 +725,7 @@ async def run_pr_review(
                     })
 
                 # Pass 2: Fact-check and verify candidate findings against the diff
+                unverified_findings = len(clean_findings) != len(raw_findings)
                 verification_performed = False
                 if clean_findings:
                     verified_findings = await _verify_findings_with_llm(
@@ -732,6 +756,7 @@ async def run_pr_review(
                                     continue
                         vf["line"] = ln_int
                         final_findings.append(vf)
+                    unverified_findings |= len(final_findings) != len(verified_findings)
                     clean_findings = final_findings
 
                 data["findings"] = clean_findings
@@ -746,6 +771,11 @@ async def run_pr_review(
                             wt["impact"] = strip_emojis(str(wt.get("impact", "Refactor"))).strip() or "Refactor"
                             wt["summary"] = strip_emojis(str(wt.get("summary", ""))).strip()
                 data["verification_status"] = "2-Pass Fact-Checked" if verification_performed else "Single-pass: no verifiable candidate findings"
+                if unverified_findings:
+                    data["verification_status"] = "Incomplete: unverified finding locations"
+                    data["summary"] += " Some findings remain unverified because their locations were not in the reviewed evidence."
+                    if data["verdict"] == "PASS":
+                        data["verdict"] = "WARN"
                 if "Coverage limited:" in annotated_diff or "Middle lines of file diff omitted" in annotated_diff:
                     data["summary"] += " Review coverage is limited; omitted code was not analyzed."
                     if data.get("verdict") == "PASS":
@@ -756,7 +786,7 @@ async def run_pr_review(
                 risks = sum(1 for f in clean_findings if f["severity"] == "risk")
                 suggested_tests = data.get("suggested_tests", [])
 
-                if bugs > 0 and str(data.get("verdict", "")).upper() == "PASS":
+                if (bugs > 0 or risks > 0) and str(data.get("verdict", "")).upper() == "PASS":
                     data["verdict"] = "WARN"
 
 
