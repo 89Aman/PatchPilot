@@ -257,12 +257,14 @@ def build_loading_review_card(
         f"| **5. Pass 2 Verification** | Fact-checking candidate findings against ground-truth diff | `{defaults['pass2']}` |",
     ]
 
+    bot_slug = get_settings().github_app_slug
+    bot_label = f"`{bot_slug}[bot]`" if bot_slug else "PatchPilot"
     card = (
         "<!-- patchpilot-ai-review -->\n"
         "## PatchPilot AI PR Review\n\n"
         f"{meta_line}\n\n"
         "> **PatchPilot Engine is actively analyzing this pull request.**\n"
-        "> `patchpilot-app[bot]` has been registered as a reviewer. This card will automatically update in-place with the final report once all security and verification checks complete.\n\n"
+        f"> {bot_label} has been registered as a reviewer. This card will automatically update in-place with the final report once all security and verification checks complete.\n\n"
         "### Live Verification Pipeline\n\n"
         "| Stage | Check Description | Status |\n"
         "| :--- | :--- | :--- |\n"
@@ -778,7 +780,7 @@ async def apply_pr_labels(
 
 def get_oauth_authorize_url(client_id: str, redirect_uri: str | None = None, state: str | None = None) -> str:
     """Generate GitHub OAuth authorization URL."""
-    base = f"https://github.com/login/oauth/authorize?client_id={client_id}&scope=read:user,repo"
+    base = f"https://github.com/login/oauth/authorize?client_id={client_id}&scope=read:user,read:org,repo"
     if redirect_uri:
         base += f"&redirect_uri={redirect_uri}"
     if state:
@@ -887,16 +889,140 @@ async def fetch_user_installations_and_repos(
             await client.aclose()
 
 
+async def fetch_user_app_installations(
+    user_token: str,
+    client: httpx.AsyncClient | None = None,
+) -> list[dict[str, Any]]:
+    """Fetch GitHub App installations accessible to the authenticated user (personal + orgs)."""
+    url = "https://api.github.com/user/installations?per_page=100"
+    headers = {
+        "Authorization": f"Bearer {user_token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+
+    close_client = False
+    if client is None:
+        client = httpx.AsyncClient(timeout=20.0)
+        close_client = True
+
+    try:
+        resp = await client.get(url, headers=headers)
+        if resp.status_code != 200:
+            logger.debug("Could not list user GitHub App installations (%d): %s", resp.status_code, resp.text[:200])
+            return []
+        data = resp.json()
+        installations = data.get("installations") if isinstance(data, dict) else []
+        return installations if isinstance(installations, list) else []
+    except Exception as exc:
+        logger.warning("Error fetching user GitHub App installations: %s", exc)
+        return []
+    finally:
+        if close_client:
+            await client.aclose()
+
+
+async def fetch_user_org_memberships(
+    user_token: str,
+    client: httpx.AsyncClient | None = None,
+) -> dict[str, str]:
+    """Fetch active GitHub Organization roles (`admin` or `member`) keyed by lowercase org login."""
+    url = "https://api.github.com/user/memberships/orgs?state=active&per_page=100"
+    headers = {
+        "Authorization": f"Bearer {user_token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+
+    close_client = False
+    if client is None:
+        client = httpx.AsyncClient(timeout=20.0)
+        close_client = True
+
+    try:
+        resp = await client.get(url, headers=headers)
+        if resp.status_code != 200:
+            logger.debug("Could not list user org memberships (%d): %s", resp.status_code, resp.text[:200])
+            return {}
+        data = resp.json()
+        roles: dict[str, str] = {}
+        if isinstance(data, list):
+            for item in data:
+                if not isinstance(item, dict):
+                    continue
+                org_login = str((item.get("organization") or {}).get("login") or "").strip().lower()
+                role = str(item.get("role") or "member").strip().lower()
+                if org_login:
+                    roles[org_login] = role
+        return roles
+    except Exception as exc:
+        logger.warning("Error fetching user org memberships: %s", exc)
+        return {}
+    finally:
+        if close_client:
+            await client.aclose()
+
+
+async def fetch_installation_repositories(
+    installation_token: str,
+    client: httpx.AsyncClient | None = None,
+) -> list[dict[str, Any]]:
+    """Fetch repositories accessible to a specific GitHub App installation token."""
+    url = "https://api.github.com/installation/repositories?per_page=100"
+    headers = {
+        "Authorization": f"Bearer {installation_token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+
+    close_client = False
+    if client is None:
+        client = httpx.AsyncClient(timeout=20.0)
+        close_client = True
+
+    try:
+        resp = await client.get(url, headers=headers)
+        if resp.status_code != 200:
+            return []
+        data = resp.json()
+        repos = data.get("repositories") if isinstance(data, dict) else []
+        if not isinstance(repos, list):
+            return []
+        return [
+            {
+                "full_name": r.get("full_name"),
+                "name": r.get("name"),
+                "owner": (r.get("owner") or {}).get("login"),
+                "private": bool(r.get("private", False)),
+                "html_url": r.get("html_url"),
+                "description": r.get("description"),
+            }
+            for r in repos
+            if isinstance(r, dict)
+        ]
+    except Exception as exc:
+        logger.warning("Error fetching installation repositories: %s", exc)
+        return []
+    finally:
+        if close_client:
+            await client.aclose()
+
+
 def create_session_jwt(user_data: dict[str, Any]) -> str:
     """Create signed session JWT for user cookie with AES-256 encrypted user_token."""
     settings = get_settings()
     now = int(time.time())
     raw_token = user_data.get("user_token", "")
     encrypted_token = encrypt_secret(raw_token) if raw_token else ""
-    payload = {
+    payload: dict[str, Any] = {
         "sub": user_data.get("login", ""),
         "avatar_url": user_data.get("avatar_url", ""),
         "name": user_data.get("name", ""),
+        "email": user_data.get("email", ""),
+        "clerk_id": user_data.get("clerk_id", ""),
+        "github_username": user_data.get("github_username", ""),
+        "github_user_id": user_data.get("github_user_id"),
+        "auth_provider": user_data.get("auth_provider", "github"),
         "user_token": encrypted_token,
         "iat": now,
         "exp": now + 86400 * 7,  # 7 days

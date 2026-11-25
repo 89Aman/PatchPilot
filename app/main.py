@@ -1,14 +1,16 @@
 import asyncio
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
+from datetime import datetime, timezone
 import hmac
 import json
 import logging
 import os
 import re
 import secrets
-from contextlib import suppress
-from app.jobs import enqueue, process_one, worker, current_job, remembered
+from pathlib import Path
 from typing import Any
+import uuid
+import httpx
 from fastapi import (
     BackgroundTasks,
     Cookie,
@@ -20,17 +22,53 @@ from fastapi import (
     Response,
     status,
 )
-from pathlib import Path
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-import httpx
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from app.billing import (
+    BillingProviderError,
+    PolarBillingClient,
+    WebhookVerificationError,
+    flush_unreported_seat_events,
+    process_polar_webhook,
+)
+from app.clerk_auth import (
+    derive_accounts_url,
+    derive_frontend_api,
+    extract_clerk_identity,
+    fetch_clerk_oauth_token,
+    fetch_clerk_user,
+    verify_clerk_token,
+)
 from app.config import settings
 from app.crypto import decrypt_secret, encrypt_secret
-from app.db import DEFAULT_POLICY, Base, SessionLocal, UserAccount, VaultConfig, engine, get_db, init_db
+from app.db import (
+    DEFAULT_POLICY,
+    Base,
+    BillingWebhookEvent,
+    ReviewUsageEvent,
+    SessionLocal,
+    UserAccount,
+    VaultConfig,
+    Workspace,
+    WorkspaceActiveCommitter,
+    WorkspaceMember,
+    engine,
+    get_db,
+    init_db,
+    is_test,
+)
+from app.entitlements import (
+    current_billing_period,
+    evaluate_review_entitlement,
+    is_workspace_subscribed,
+    record_completed_review,
+    workspace_billing_url,
+)
 from app.github_auth import (
     add_comment_reaction,
     apply_pr_labels,
@@ -39,6 +77,7 @@ from app.github_auth import (
     create_pending_pr_review,
     create_session_jwt,
     exchange_oauth_code,
+    fetch_installation_repositories,
     fetch_pr_diff,
     fetch_pr_metadata,
     fetch_user_installations_and_repos,
@@ -53,16 +92,10 @@ from app.github_auth import (
     verify_session_jwt,
     verify_webhook_signature,
 )
-from app.clerk_auth import (
-    derive_frontend_api,
-    extract_clerk_identity,
-    fetch_clerk_oauth_token,
-    fetch_clerk_user,
-    verify_clerk_token,
-)
-import uuid
+from app.jobs import current_job, enqueue, process_one, remembered, worker
 from app.llm import (
     annotate_diff,
+    build_managed_vault_config,
     get_provider_candidates,
     run_interactive_command,
     run_pr_review,
@@ -76,6 +109,16 @@ from app.security import (
 )
 from app.triage import compute_pr_triage
 from app.ui import DASHBOARD_HTML
+from app.webhooks_crypto import verify_standard_webhook
+from app.workspaces import (
+    ADMIN_ROLES,
+    authorize_workspace_member,
+    get_vault_for_workspace,
+    list_user_workspaces,
+    resolve_workspace_for_webhook,
+    sync_user_workspaces,
+    upsert_workspace_from_installation,
+)
 
 TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
@@ -115,22 +158,27 @@ app = FastAPI(
 
 from starlette.middleware.cors import CORSMiddleware
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
-        "https://patchpilot.noventra.org.in",
-        "http://localhost:8080",
-        "http://127.0.0.1:8080",
-    ],
-    allow_origin_regex=r"https://.*\.noventra\.org\.in",
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+_cors_kwargs: dict[str, Any] = {
+    "allow_origins": settings.cors_origins,
+    "allow_credentials": True,
+    "allow_methods": ["*"],
+    "allow_headers": ["*"],
+}
+if settings.CORS_ALLOW_ORIGIN_REGEX.strip():
+    _cors_kwargs["allow_origin_regex"] = settings.CORS_ALLOW_ORIGIN_REGEX.strip()
+
+app.add_middleware(CORSMiddleware, **_cors_kwargs)
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+
+def _request_origin(request: Request) -> str:
+    """Resolve canonical public origin from APP_BASE_URL or incoming request URL."""
+    if settings.app_base_url:
+        return settings.app_base_url
+    return str(request.base_url).rstrip("/")
 
 
 async def _verified_clerk_identity(payload: dict[str, Any]) -> dict[str, Any]:
@@ -140,9 +188,129 @@ async def _verified_clerk_identity(payload: dict[str, Any]) -> dict[str, Any]:
     identity = extract_clerk_identity(payload, user_info)
     # Display usernames and email prefixes are user-editable, not GitHub ownership proof.
     github_username = (user_info or {}).get("github_username") or ""
-    identity.update(login=github_username or sub, github_username=github_username,
-                    github_connected=bool(github_username))
+    github_user_id = (user_info or {}).get("github_user_id")
+    email = (user_info or {}).get("email") or payload.get("email") or ""
+    identity.update(
+        login=github_username or sub,
+        github_username=github_username,
+        github_user_id=github_user_id,
+        email=email,
+        github_connected=bool(github_username),
+    )
     return identity
+
+
+async def _resolve_authenticated_identity(
+    patchpilot_session: str | None = None,
+    authorization: str | None = None,
+    clerk_session: str | None = None,
+) -> dict[str, Any] | None:
+    """Resolve authenticated web user from session cookie, Clerk Bearer token, or Clerk cookie."""
+    session = verify_session_jwt(patchpilot_session)
+    if session:
+        login = (session.get("sub") or "").strip()
+        gh_username = (session.get("github_username") or "").strip()
+        clerk_id = (session.get("clerk_id") or "").strip()
+        raw_gh_id = session.get("github_user_id")
+        gh_user_id = int(raw_gh_id) if raw_gh_id is not None and str(raw_gh_id).isdigit() else None
+        user_token = session.get("user_token") or ""
+        provider = session.get("auth_provider") or ("clerk" if clerk_id else "github")
+        # If signed in directly with GitHub OAuth (no Clerk), bind canonical user key to github:<id or login>
+        canonical_user_id = clerk_id or (f"github:{gh_user_id}" if gh_user_id else login)
+        return {
+            "clerk_id": canonical_user_id,
+            "raw_clerk_id": clerk_id,
+            "login": login,
+            "name": session.get("name") or login,
+            "email": session.get("email") or "",
+            "avatar_url": session.get("avatar_url") or "",
+            "github_username": gh_username or (login if user_token else ""),
+            "github_user_id": gh_user_id,
+            "github_connected": bool(user_token or gh_username),
+            "user_token": user_token,
+            "provider": provider,
+        }
+
+    token = None
+    if authorization and authorization.lower().startswith("bearer "):
+        token = authorization[7:].strip()
+    elif clerk_session:
+        token = clerk_session
+
+    if token:
+        clerk_payload = await verify_clerk_token(token)
+        if clerk_payload:
+            identity = await _verified_clerk_identity(clerk_payload)
+            return {
+                "clerk_id": identity.get("clerk_id") or clerk_payload.get("sub", ""),
+                "raw_clerk_id": identity.get("clerk_id") or clerk_payload.get("sub", ""),
+                "login": identity["login"],
+                "name": identity["name"],
+                "email": identity.get("email") or "",
+                "avatar_url": identity["avatar_url"],
+                "github_username": identity.get("github_username") or "",
+                "github_user_id": identity.get("github_user_id"),
+                "github_connected": bool(identity.get("github_connected")),
+                "user_token": "",
+                "provider": "clerk",
+            }
+
+    return None
+
+
+async def _resolve_user_github_token(db: AsyncSession, identity: dict[str, Any]) -> str:
+    """Resolve decrypted GitHub OAuth token from session, DB, or Clerk Backend API."""
+    user_token = (identity.get("user_token") or "").strip()
+    if user_token:
+        return user_token
+
+    raw_clerk_id = (identity.get("raw_clerk_id") or "").strip()
+    login_clean = (identity.get("login") or "").strip().lower()
+
+    if login_clean:
+        res = await db.execute(select(UserAccount).where(UserAccount.login == login_clean))
+        rec = res.scalar_one_or_none()
+        if rec is None and raw_clerk_id:
+            res = await db.execute(select(UserAccount).where(UserAccount.clerk_id == raw_clerk_id))
+            rec = res.scalar_one_or_none()
+        if rec and rec.encrypted_github_token:
+            try:
+                user_token = (decrypt_secret(rec.encrypted_github_token) or "").strip()
+            except Exception:
+                user_token = ""
+
+    if not user_token and raw_clerk_id and settings.clerk_secret_key:
+        user_token = (await fetch_clerk_oauth_token(raw_clerk_id, "oauth_github") or "").strip()
+
+    return user_token
+
+
+async def _user_is_workspace_admin_for_owner(
+    db: AsyncSession,
+    owner_clean: str,
+    identity: dict[str, Any],
+) -> bool:
+    """Return True if the authenticated user is a verified owner/admin for a workspace matching owner_clean."""
+    clerk_user_id = identity.get("clerk_id") or ""
+    if not clerk_user_id or not owner_clean:
+        return False
+    res = await db.execute(
+        select(Workspace).where(func.lower(Workspace.github_login) == owner_clean)
+    )
+    ws = res.scalar_one_or_none()
+    if ws is None:
+        return False
+    gh_token = await _resolve_user_github_token(db, identity)
+    pair = await authorize_workspace_member(
+        db,
+        workspace_id=ws.id,
+        clerk_user_id=clerk_user_id,
+        require_admin=True,
+        github_token=gh_token,
+        github_user_id=identity.get("github_user_id"),
+        github_login=identity.get("github_username") or identity.get("login"),
+    )
+    return pair is not None
 
 
 async def verify_admin_or_session(
@@ -151,45 +319,36 @@ async def verify_admin_or_session(
     authorization: str | None = Header(None, alias="Authorization"),
     patchpilot_session: str | None = Cookie(None),
     clerk_session: str | None = Cookie(None, alias="__session"),
+    db: AsyncSession = Depends(get_db),
 ) -> None:
-    """Verify request authorization via X-Admin-Token, session cookie, or Clerk token."""
+    """Verify request authorization via X-Admin-Token, personal session, or verified GitHub Org admin membership."""
     if x_admin_token and hmac.compare_digest(x_admin_token.strip(), settings.ADMIN_API_TOKEN.strip()):
         return
 
     owner_clean = owner.strip().lower()
 
-    # Check Bearer authorization header (Admin token or Clerk JWT)
     if authorization and authorization.lower().startswith("bearer "):
         bearer_val = authorization[7:].strip()
         if hmac.compare_digest(bearer_val, settings.ADMIN_API_TOKEN.strip()):
             return
-        clerk_payload = await verify_clerk_token(bearer_val)
-        if clerk_payload:
-            identity = await _verified_clerk_identity(clerk_payload)
-            sub = clerk_payload.get("sub", "").lower()
-            gh_user = (identity.get("github_username") or "").lower()
-            if identity["login"].lower() == owner_clean or sub == owner_clean or (gh_user and gh_user == owner_clean):
-                return
 
-    session_data = verify_session_jwt(patchpilot_session)
-    if session_data:
-        sub_login = (session_data.get("sub") or "").lower()
-        gh_login = (session_data.get("github_username") or "").lower()
-        if sub_login == owner_clean or (gh_login and gh_login == owner_clean):
+    identity = await _resolve_authenticated_identity(
+        patchpilot_session=patchpilot_session,
+        authorization=authorization,
+        clerk_session=clerk_session,
+    )
+    if identity:
+        sub_login = (identity.get("login") or "").lower()
+        clerk_sub = (identity.get("raw_clerk_id") or identity.get("clerk_id") or "").lower()
+        gh_login = (identity.get("github_username") or "").lower()
+        if sub_login == owner_clean or clerk_sub == owner_clean or (gh_login and gh_login == owner_clean):
             return
-
-    if clerk_session:
-        clerk_payload = await verify_clerk_token(clerk_session)
-        if clerk_payload:
-            identity = await _verified_clerk_identity(clerk_payload)
-            sub = clerk_payload.get("sub", "").lower()
-            gh_user = (identity.get("github_username") or "").lower()
-            if identity["login"].lower() == owner_clean or sub == owner_clean or (gh_user and gh_user == owner_clean):
-                return
+        if await _user_is_workspace_admin_for_owner(db, owner_clean, identity):
+            return
 
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Unauthorized: Valid X-Admin-Token header or matching authenticated session required",
+        detail="Unauthorized: Valid X-Admin-Token header or matching authenticated workspace admin session required",
     )
 
 
@@ -211,6 +370,12 @@ class FallbackUpsertRequest(BaseModel):
     is_enabled: bool = Field(default=True, description="Enable or disable this candidate")
 
 
+class WorkspaceBillingSettingsRequest(BaseModel):
+    key_mode: str | None = Field(default=None, description="managed | byok")
+    seat_cap: int | None = Field(default=None, description="Optional max billable active committers per cycle (null to clear)")
+    clear_seat_cap: bool = Field(default=False, description="Set true to remove an existing seat cap")
+
+
 # -----------------------------------------------------------------------------
 # Frontend Routes
 # -----------------------------------------------------------------------------
@@ -218,7 +383,29 @@ class FallbackUpsertRequest(BaseModel):
 @app.get("/", response_class=HTMLResponse, tags=["Frontend"])
 async def root_page(request: Request):
     """Render main PatchPilot landing page."""
-    return templates.TemplateResponse(request=request, name="index.html")
+    return templates.TemplateResponse(
+        request=request,
+        name="index.html",
+        context={
+            "app_base_url": _request_origin(request),
+            "install_url": settings.github_app_install_url,
+            "billing_enabled": settings.BILLING_ENABLED,
+        },
+    )
+
+
+@app.get("/pricing", response_class=HTMLResponse, tags=["Frontend"])
+async def pricing_page(request: Request):
+    """Render PatchPilot pricing page."""
+    return templates.TemplateResponse(
+        request=request,
+        name="pricing.html",
+        context={
+            "app_base_url": _request_origin(request),
+            "install_url": settings.github_app_install_url,
+            "billing_enabled": settings.BILLING_ENABLED,
+        },
+    )
 
 
 @app.get("/dashboard", response_class=HTMLResponse, tags=["Frontend"])
@@ -237,7 +424,14 @@ async def settings_page():
 @app.get("/documentation", response_class=HTMLResponse, tags=["Frontend"])
 async def docs_page(request: Request):
     """Render comprehensive PatchPilot documentation and commands page."""
-    return templates.TemplateResponse(request=request, name="docs.html")
+    return templates.TemplateResponse(
+        request=request,
+        name="docs.html",
+        context={
+            "app_base_url": _request_origin(request),
+            "install_url": settings.github_app_install_url,
+        },
+    )
 
 
 @app.get("/privacy", response_class=HTMLResponse, tags=["Legal"])
@@ -262,33 +456,41 @@ async def health_check():
 
 
 @app.get("/robots.txt", include_in_schema=False)
-async def robots_txt():
+async def robots_txt(request: Request):
     """Serve robots.txt for search engine crawlers."""
+    origin = _request_origin(request)
     content = (
         "User-agent: *\n"
         "Allow: /\n"
         "Allow: /docs\n"
+        "Allow: /pricing\n"
         "Disallow: /vault/\n"
         "Disallow: /api/\n"
         "Disallow: /webhooks/\n"
-        "Sitemap: https://patchpilot.noventra.org.in/sitemap.xml\n"
+        f"Sitemap: {origin}/sitemap.xml\n"
     )
     return Response(content=content, media_type="text/plain")
 
 
 @app.get("/sitemap.xml", include_in_schema=False)
-async def sitemap_xml():
+async def sitemap_xml(request: Request):
     """Serve canonical sitemap.xml."""
+    origin = _request_origin(request)
     content = (
         '<?xml version="1.0" encoding="UTF-8"?>\n'
         '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
         '  <url>\n'
-        '    <loc>https://patchpilot.noventra.org.in/</loc>\n'
+        f'    <loc>{origin}/</loc>\n'
         '    <changefreq>weekly</changefreq>\n'
         '    <priority>1.0</priority>\n'
         '  </url>\n'
         '  <url>\n'
-        '    <loc>https://patchpilot.noventra.org.in/docs</loc>\n'
+        f'    <loc>{origin}/pricing</loc>\n'
+        '    <changefreq>weekly</changefreq>\n'
+        '    <priority>0.9</priority>\n'
+        '  </url>\n'
+        '  <url>\n'
+        f'    <loc>{origin}/docs</loc>\n'
         '    <changefreq>weekly</changefreq>\n'
         '    <priority>0.8</priority>\n'
         '  </url>\n'
@@ -404,10 +606,11 @@ async def _upsert_user_account(
     email: str | None = None,
     clerk_id: str | None = None,
     github_username: str | None = None,
+    github_user_id: int | None = None,
     github_token: str | None = None,
     auth_provider: str = "github",
 ) -> None:
-    """Persist or update authenticated user profile and AES-256-GCM encrypted GitHub token in PostgreSQL/Supabase."""
+    """Persist or update authenticated user profile and AES-256-GCM encrypted GitHub token."""
     login_clean = (login or "").strip().lower()
     if not login_clean:
         return
@@ -427,6 +630,8 @@ async def _upsert_user_account(
             user_rec.clerk_id = clerk_id
         if github_username:
             user_rec.github_username = github_username
+        if github_user_id is not None:
+            user_rec.github_user_id = int(github_user_id)
         if enc_token:
             user_rec.encrypted_github_token = enc_token
         user_rec.auth_provider = auth_provider
@@ -434,6 +639,7 @@ async def _upsert_user_account(
         user_rec = UserAccount(
             login=login_clean,
             clerk_id=clerk_id or None,
+            github_user_id=int(github_user_id) if github_user_id is not None else None,
             github_username=github_username or login_clean,
             email=email or None,
             name=name or login_clean,
@@ -448,7 +654,7 @@ async def _upsert_user_account(
 @app.get("/auth/callback", tags=["Authentication"])
 @app.get("/auth/github/callback", tags=["Authentication"])
 async def auth_callback(request: Request, code: str, db: AsyncSession = Depends(get_db)):
-    """Handle OAuth callback, persist user in Supabase PostgreSQL, issue session cookie, and redirect to dashboard."""
+    """Handle OAuth callback, persist user in PostgreSQL, sync workspaces, and issue session cookie."""
     client_id = settings.GITHUB_CLIENT_ID.strip()
     client_secret = settings.GITHUB_CLIENT_SECRET.strip()
     if not client_id or not client_secret:
@@ -468,21 +674,38 @@ async def auth_callback(request: Request, code: str, db: AsyncSession = Depends(
         user_token = await exchange_oauth_code(code, client_id, client_secret, client=client)
         profile = await fetch_user_profile(user_token, client=client)
 
+    gh_user_id = int(profile["id"]) if profile.get("id") else None
+    gh_login = profile.get("login") or ""
     await _upsert_user_account(
         db,
-        login=profile.get("login") or "",
+        login=gh_login,
         name=profile.get("name"),
         avatar_url=profile.get("avatar_url"),
         email=profile.get("email"),
-        github_username=profile.get("login"),
+        github_username=gh_login,
+        github_user_id=gh_user_id,
         github_token=user_token,
         auth_provider="github",
     )
 
+    canonical_id = f"github:{gh_user_id}" if gh_user_id else gh_login.lower()
+    with suppress(Exception):
+        await sync_user_workspaces(
+            db,
+            clerk_user_id=canonical_id,
+            github_token=user_token,
+            github_user_id=gh_user_id,
+            github_login=gh_login,
+        )
+
     session_payload = {
-        "login": profile.get("login"),
+        "login": gh_login,
         "avatar_url": profile.get("avatar_url"),
         "name": profile.get("name"),
+        "email": profile.get("email") or "",
+        "github_username": gh_login,
+        "github_user_id": gh_user_id,
+        "auth_provider": "github",
         "user_token": user_token,
     }
     jwt_token = create_session_jwt(session_payload)
@@ -507,7 +730,7 @@ class ClerkSessionRequest(BaseModel):
 
 @app.get("/auth/clerk/config", tags=["Authentication"])
 async def clerk_config():
-    """Return Clerk publishable key and configuration status for frontend client."""
+    """Return Clerk publishable key, dynamic portal URLs, and SaaS feature flags."""
     pk = settings.clerk_publishable_key
     custom_api = settings.clerk_frontend_api
     derived_api = custom_api or (derive_frontend_api(pk) if pk else None)
@@ -515,12 +738,16 @@ async def clerk_config():
         "publishable_key": pk,
         "is_configured": bool(pk),
         "frontend_api": derived_api,
+        "accounts_url": derive_accounts_url(settings),
+        "install_url": settings.github_app_install_url,
+        "billing_enabled": settings.BILLING_ENABLED,
+        "github_oauth_configured": bool(settings.GITHUB_CLIENT_ID.strip()),
     }
 
 
 @app.post("/auth/clerk/session", tags=["Authentication"])
 async def clerk_session(request: Request, body: ClerkSessionRequest, db: AsyncSession = Depends(get_db)):
-    """Verify Clerk session token, persist user in Supabase PostgreSQL, and establish PatchPilot session cookie."""
+    """Verify Clerk session token, persist user, sync GitHub workspaces, and set session cookie."""
     payload = await verify_clerk_token(body.session_token)
     if not payload:
         raise HTTPException(
@@ -539,23 +766,36 @@ async def clerk_session(request: Request, body: ClerkSessionRequest, db: AsyncSe
         login=identity["login"],
         name=identity["name"],
         avatar_url=identity["avatar_url"],
-        email=payload.get("email"),
+        email=identity.get("email") or payload.get("email"),
         clerk_id=sub,
         github_username=identity.get("github_username") or None,
+        github_user_id=identity.get("github_user_id"),
         github_token=github_token or None,
         auth_provider="clerk",
     )
+
+    if sub and (github_token or identity.get("github_user_id")):
+        with suppress(Exception):
+            await sync_user_workspaces(
+                db,
+                clerk_user_id=sub,
+                github_token=github_token or None,
+                github_user_id=identity.get("github_user_id"),
+                github_login=identity.get("github_username") or None,
+            )
 
     jwt_token = create_session_jwt({
         "login": identity["login"],
         "avatar_url": identity["avatar_url"],
         "name": identity["name"],
+        "email": identity.get("email") or payload.get("email") or "",
         "user_token": github_token,
         "clerk_id": sub,
         "github_username": identity.get("github_username") or "",
+        "github_user_id": identity.get("github_user_id"),
+        "auth_provider": "clerk",
     })
 
-    import json
     response = Response(
         content=json.dumps({"status": "ok", "user": identity}),
         media_type="application/json",
@@ -587,36 +827,26 @@ async def auth_me(
     clerk_session: str | None = Cookie(None, alias="__session"),
 ):
     """Return currently authenticated user profile from session cookie or Clerk."""
-    session = verify_session_jwt(patchpilot_session)
-    if session:
-        has_gh = bool(session.get("user_token") or session.get("github_username"))
+    identity = await _resolve_authenticated_identity(
+        patchpilot_session=patchpilot_session,
+        authorization=authorization,
+        clerk_session=clerk_session,
+    )
+    if identity:
         return {
             "logged_in": True,
             "user": {
-                "login": session.get("sub"),
-                "avatar_url": session.get("avatar_url"),
-                "name": session.get("name"),
-                "github_username": session.get("github_username") or session.get("sub"),
-                "github_connected": has_gh,
+                "login": identity["login"],
+                "avatar_url": identity["avatar_url"],
+                "name": identity["name"],
+                "email": identity.get("email") or "",
+                "clerk_id": identity.get("raw_clerk_id") or identity.get("clerk_id") or "",
+                "github_username": identity.get("github_username") or identity["login"],
+                "github_user_id": identity.get("github_user_id"),
+                "github_connected": bool(identity.get("github_connected")),
             },
-            "provider": "github" if session.get("user_token") else "clerk",
+            "provider": identity["provider"],
         }
-
-    token = None
-    if authorization and authorization.lower().startswith("bearer "):
-        token = authorization[7:].strip()
-    elif clerk_session:
-        token = clerk_session
-
-    if token:
-        clerk_payload = await verify_clerk_token(token)
-        if clerk_payload:
-            identity = await _verified_clerk_identity(clerk_payload)
-            return {
-                "logged_in": True,
-                "user": identity,
-                "provider": "clerk",
-            }
 
     return {"logged_in": False, "user": None}
 
@@ -632,7 +862,13 @@ async def set_user_github_token(
     patchpilot_session: str | None = Cookie(None),
     db: AsyncSession = Depends(get_db),
 ):
-    """Store or update GitHub access token in Supabase PostgreSQL and session cookie to enable repo access."""
+    """Store GitHub PAT only when ALLOW_MANUAL_PAT is enabled (disabled by default in production)."""
+    if not (settings.ALLOW_MANUAL_PAT or is_test):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Manual PAT linking is disabled. Connect GitHub via your account OAuth settings.",
+        )
+
     session = verify_session_jwt(patchpilot_session)
     if not session:
         raise HTTPException(status_code=401, detail="Authentication required")
@@ -645,6 +881,7 @@ async def set_user_github_token(
         profile = await fetch_user_profile(clean_token, client=client)
 
     gh_login = profile.get("login") or session.get("sub") or ""
+    gh_user_id = int(profile["id"]) if profile.get("id") else None
     await _upsert_user_account(
         db,
         login=gh_login,
@@ -652,6 +889,7 @@ async def set_user_github_token(
         avatar_url=profile.get("avatar_url") or session.get("avatar_url"),
         clerk_id=session.get("clerk_id") or None,
         github_username=profile.get("login"),
+        github_user_id=gh_user_id,
         github_token=clean_token,
         auth_provider="github",
     )
@@ -660,12 +898,14 @@ async def set_user_github_token(
         "login": gh_login,
         "avatar_url": profile.get("avatar_url") or session.get("avatar_url"),
         "name": profile.get("name") or session.get("name"),
+        "email": session.get("email", ""),
         "user_token": clean_token,
         "clerk_id": session.get("clerk_id", ""),
         "github_username": profile.get("login", ""),
+        "github_user_id": gh_user_id,
+        "auth_provider": "github",
     })
 
-    import json
     response = Response(
         content=json.dumps({"status": "ok", "github_login": profile.get("login")}),
         media_type="application/json",
@@ -684,36 +924,24 @@ async def set_user_github_token(
 @app.get("/api/user/repos", tags=["Repositories"])
 async def get_user_repositories(
     patchpilot_session: str | None = Cookie(None),
+    authorization: str | None = Header(None, alias="Authorization"),
+    clerk_session: str | None = Cookie(None, alias="__session"),
     db: AsyncSession = Depends(get_db),
 ):
     """Fetch repositories scoped to the authenticated user."""
-    session = verify_session_jwt(patchpilot_session)
-    if not session:
+    identity = await _resolve_authenticated_identity(
+        patchpilot_session=patchpilot_session,
+        authorization=authorization,
+        clerk_session=clerk_session,
+    )
+    if not identity:
         raise HTTPException(status_code=401, detail="Authentication required to inspect repository scope")
 
-    user_token = session.get("user_token")
-    clerk_id = session.get("clerk_id")
-    sub_login = (session.get("sub") or "").strip().lower()
-
-    # Check PostgreSQL/Supabase users table if token not in cookie
-    if not user_token and sub_login:
-        stmt = select(UserAccount).where(UserAccount.login == sub_login)
-        result = await db.execute(stmt)
-        user_rec = result.scalar_one_or_none()
-        if user_rec and user_rec.encrypted_github_token:
-            try:
-                user_token = decrypt_secret(user_rec.encrypted_github_token)
-            except Exception:
-                user_token = ""
-
-    # If still no token, check if Clerk has user's GitHub OAuth token
-    if not user_token and clerk_id and settings.clerk_secret_key:
-        user_token = await fetch_clerk_oauth_token(clerk_id, "oauth_github")
-
+    user_token = await _resolve_user_github_token(db, identity)
     if not user_token:
         return {
             "github_connected": False,
-            "message": "GitHub account not connected. Connect GitHub to allow repository scope.",
+            "message": "GitHub account not connected. Connect GitHub via OAuth to inspect repositories.",
             "repos": [],
         }
 
@@ -724,6 +952,445 @@ async def get_user_repositories(
         "github_connected": True,
         "repos": repos,
     }
+
+
+# -----------------------------------------------------------------------------
+# Multi-Tenant Workspace & Per-Active-Committer Billing Endpoints
+# -----------------------------------------------------------------------------
+
+async def _require_identity(
+    patchpilot_session: str | None = Cookie(None),
+    authorization: str | None = Header(None, alias="Authorization"),
+    clerk_session: str | None = Cookie(None, alias="__session"),
+) -> dict[str, Any]:
+    identity = await _resolve_authenticated_identity(
+        patchpilot_session=patchpilot_session,
+        authorization=authorization,
+        clerk_session=clerk_session,
+    )
+    if not identity:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
+    return identity
+
+
+async def _serialize_workspace(db: AsyncSession, ws: Workspace, role: str) -> dict[str, Any]:
+    period = current_billing_period(ws)
+    active_count = await db.scalar(
+        select(func.count()).select_from(WorkspaceActiveCommitter).where(
+            WorkspaceActiveCommitter.workspace_id == ws.id,
+            WorkspaceActiveCommitter.billing_period == period,
+        )
+    ) or 0
+    return {
+        "id": ws.id,
+        "github_account_id": ws.github_account_id,
+        "github_login": ws.github_login,
+        "account_type": ws.account_type,
+        "github_installation_id": ws.github_installation_id,
+        "installation_status": ws.installation_status,
+        "role": role,
+        "is_admin": role.lower() in ADMIN_ROLES,
+        "key_mode": ws.key_mode,
+        "plan_tier": ws.plan_tier,
+        "subscription_status": ws.subscription_status,
+        "is_subscribed": is_workspace_subscribed(ws),
+        "billing_enabled": settings.BILLING_ENABLED,
+        "current_period_start": ws.current_period_start.isoformat() if ws.current_period_start else None,
+        "current_period_end": ws.current_period_end.isoformat() if ws.current_period_end else None,
+        "cancel_at_period_end": bool(ws.cancel_at_period_end),
+        "seat_cap": ws.seat_cap,
+        "billing_period": period,
+        "active_committers_count": int(active_count),
+    }
+
+
+async def _require_workspace_member(
+    db: AsyncSession,
+    workspace_id: str,
+    identity: dict[str, Any],
+    *,
+    require_admin: bool = False,
+) -> tuple[Workspace, WorkspaceMember]:
+    gh_token = await _resolve_user_github_token(db, identity)
+    pair = await authorize_workspace_member(
+        db,
+        workspace_id=workspace_id,
+        clerk_user_id=identity["clerk_id"],
+        require_admin=require_admin,
+        github_token=gh_token,
+        github_user_id=identity.get("github_user_id"),
+        github_login=identity.get("github_username") or identity.get("login"),
+    )
+    if pair is None:
+        detail = (
+            "Workspace owner or GitHub organization admin role required"
+            if require_admin
+            else "You do not have access to this workspace"
+        )
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=detail)
+    return pair
+
+
+@app.get("/api/workspaces", tags=["Workspaces"])
+async def get_workspaces(
+    identity: dict[str, Any] = Depends(_require_identity),
+    db: AsyncSession = Depends(get_db),
+):
+    """List personal and GitHub Organization workspaces accessible to the signed-in user."""
+    pairs = await list_user_workspaces(db, identity["clerk_id"])
+    if not pairs:
+        gh_token = await _resolve_user_github_token(db, identity)
+        if gh_token or identity.get("github_user_id"):
+            pairs = await sync_user_workspaces(
+                db,
+                clerk_user_id=identity["clerk_id"],
+                github_token=gh_token or None,
+                github_user_id=identity.get("github_user_id"),
+                github_login=identity.get("github_username") or identity.get("login"),
+            )
+
+    items = [await _serialize_workspace(db, ws, member.role) for ws, member in pairs]
+    return {
+        "workspaces": items,
+        "billing_enabled": settings.BILLING_ENABLED,
+        "install_url": settings.github_app_install_url,
+    }
+
+
+@app.post("/api/workspaces/sync", tags=["Workspaces"])
+async def sync_workspaces_endpoint(
+    identity: dict[str, Any] = Depends(_require_identity),
+    db: AsyncSession = Depends(get_db),
+):
+    """Force refresh of GitHub App installations and Organization roles for the current user."""
+    gh_token = await _resolve_user_github_token(db, identity)
+    if not gh_token and not identity.get("github_user_id"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Connect your GitHub account via Clerk OAuth before syncing workspaces.",
+        )
+
+    pairs = await sync_user_workspaces(
+        db,
+        clerk_user_id=identity["clerk_id"],
+        github_token=gh_token or None,
+        github_user_id=identity.get("github_user_id"),
+        github_login=identity.get("github_username") or identity.get("login"),
+    )
+    items = [await _serialize_workspace(db, ws, member.role) for ws, member in pairs]
+    return {"status": "ok", "workspaces": items}
+
+
+@app.get("/api/workspaces/{workspace_id}/repos", tags=["Workspaces"])
+async def get_workspace_repos(
+    workspace_id: str,
+    identity: dict[str, Any] = Depends(_require_identity),
+    db: AsyncSession = Depends(get_db),
+):
+    """List repositories scoped to this workspace's GitHub App installation."""
+    ws, _ = await _require_workspace_member(db, workspace_id, identity, require_admin=False)
+    if not ws.github_installation_id or ws.installation_status != "active":
+        return {"installed": False, "repos": [], "install_url": settings.github_app_install_url}
+    if not settings.GITHUB_PRIVATE_KEY.strip():
+        return {"installed": True, "repos": [], "install_url": settings.github_app_install_url}
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            inst_token = await get_installation_token(ws.github_installation_id, client=client)
+            repos = await fetch_installation_repositories(inst_token, client=client)
+        return {"installed": True, "repos": repos, "install_url": settings.github_app_install_url}
+    except Exception as exc:
+        logger.warning("Failed fetching installation repos for workspace %s: %s", ws.id, exc)
+        return {"installed": True, "repos": [], "install_url": settings.github_app_install_url}
+
+
+@app.get("/api/workspaces/{workspace_id}/vault", tags=["Workspaces"])
+async def get_workspace_vault(
+    workspace_id: str,
+    identity: dict[str, Any] = Depends(_require_identity),
+    db: AsyncSession = Depends(get_db),
+):
+    """Retrieve workspace BYOK vault metadata and key mode (member read access)."""
+    ws, member = await _require_workspace_member(db, workspace_id, identity, require_admin=False)
+    cfg = await get_vault_for_workspace(db, ws)
+    if not cfg:
+        return {
+            "workspace_id": ws.id,
+            "owner": ws.github_login,
+            "key_mode": ws.key_mode,
+            "is_admin": member.role.lower() in ADMIN_ROLES,
+            "provider": "gemini",
+            "model": "gemini-2.5-pro",
+            "base_url": "",
+            "has_api_key": False,
+            "masked_api_key": "",
+            "review_policy": DEFAULT_POLICY,
+            "fallbacks": [],
+            "free_models": OFFICIAL_FREE_MODELS,
+        }
+    return {
+        "workspace_id": ws.id,
+        "owner": cfg.owner,
+        "key_mode": ws.key_mode,
+        "is_admin": member.role.lower() in ADMIN_ROLES,
+        "provider": cfg.provider,
+        "model": cfg.model,
+        "base_url": cfg.base_url or "",
+        "has_api_key": bool(cfg.encrypted_api_key),
+        "masked_api_key": _mask_api_key(cfg.encrypted_api_key),
+        "review_policy": cfg.review_policy,
+        "fallbacks": _serialize_fallbacks(cfg.fallbacks_json),
+        "free_models": OFFICIAL_FREE_MODELS,
+        "updated_at": cfg.updated_at.isoformat() if cfg.updated_at else None,
+    }
+
+
+@app.put("/api/workspaces/{workspace_id}/vault", tags=["Workspaces"])
+async def upsert_workspace_vault(
+    workspace_id: str,
+    body: VaultUpsertRequest,
+    identity: dict[str, Any] = Depends(_require_identity),
+    db: AsyncSession = Depends(get_db),
+):
+    """Create or update BYOK vault credentials for a workspace (owner/admin only)."""
+    ws, _ = await _require_workspace_member(db, workspace_id, identity, require_admin=True)
+    cfg = await get_vault_for_workspace(db, ws)
+
+    encrypted_key = ""
+    if body.api_key and body.api_key.strip():
+        encrypted_key = encrypt_secret(body.api_key.strip())
+    elif cfg and cfg.encrypted_api_key:
+        encrypted_key = cfg.encrypted_api_key
+
+    if cfg:
+        cfg.workspace_id = ws.id
+        cfg.provider = body.provider.lower()
+        cfg.model = body.model.strip()
+        cfg.encrypted_api_key = encrypted_key
+        cfg.base_url = body.base_url.strip() if body.base_url else None
+        cfg.review_policy = body.review_policy.strip()
+    else:
+        cfg = VaultConfig(
+            owner=ws.github_login.strip().lower(),
+            workspace_id=ws.id,
+            provider=body.provider.lower(),
+            model=body.model.strip(),
+            encrypted_api_key=encrypted_key,
+            base_url=body.base_url.strip() if body.base_url else None,
+            review_policy=body.review_policy.strip(),
+            fallbacks_json="[]",
+        )
+        db.add(cfg)
+
+    await db.commit()
+    await db.refresh(cfg)
+
+    return {
+        "workspace_id": ws.id,
+        "owner": cfg.owner,
+        "key_mode": ws.key_mode,
+        "provider": cfg.provider,
+        "model": cfg.model,
+        "base_url": cfg.base_url or "",
+        "has_api_key": bool(cfg.encrypted_api_key),
+        "masked_api_key": _mask_api_key(cfg.encrypted_api_key),
+        "review_policy": cfg.review_policy,
+        "fallbacks": _serialize_fallbacks(cfg.fallbacks_json),
+        "free_models": OFFICIAL_FREE_MODELS,
+        "updated_at": cfg.updated_at.isoformat() if cfg.updated_at else None,
+    }
+
+
+@app.post("/api/workspaces/{workspace_id}/vault/fallbacks", tags=["Workspaces"])
+async def add_workspace_fallback(
+    workspace_id: str,
+    body: FallbackUpsertRequest,
+    identity: dict[str, Any] = Depends(_require_identity),
+    db: AsyncSession = Depends(get_db),
+):
+    """Add or update a fallback LLM key for a workspace (owner/admin only)."""
+    ws, _ = await _require_workspace_member(db, workspace_id, identity, require_admin=True)
+    return await add_or_update_fallback(ws.github_login, body, None, db)
+
+
+@app.delete("/api/workspaces/{workspace_id}/vault/fallbacks/{fallback_id}", tags=["Workspaces"])
+async def delete_workspace_fallback(
+    workspace_id: str,
+    fallback_id: str,
+    identity: dict[str, Any] = Depends(_require_identity),
+    db: AsyncSession = Depends(get_db),
+):
+    """Delete a fallback LLM key for a workspace (owner/admin only)."""
+    ws, _ = await _require_workspace_member(db, workspace_id, identity, require_admin=True)
+    return await delete_fallback(ws.github_login, fallback_id, None, db)
+
+
+@app.post("/api/workspaces/{workspace_id}/vault/fallbacks/{fallback_id}/set-primary", tags=["Workspaces"])
+async def promote_workspace_fallback(
+    workspace_id: str,
+    fallback_id: str,
+    identity: dict[str, Any] = Depends(_require_identity),
+    db: AsyncSession = Depends(get_db),
+):
+    """Promote a fallback key to primary for a workspace (owner/admin only)."""
+    ws, _ = await _require_workspace_member(db, workspace_id, identity, require_admin=True)
+    return await promote_fallback_to_primary(ws.github_login, fallback_id, None, db)
+
+
+@app.post("/api/workspaces/{workspace_id}/vault/test", tags=["Workspaces"])
+async def test_workspace_vault(
+    workspace_id: str,
+    fallback_id: str | None = None,
+    identity: dict[str, Any] = Depends(_require_identity),
+    db: AsyncSession = Depends(get_db),
+):
+    """Test primary or fallback LLM connectivity for a workspace (owner/admin only)."""
+    ws, _ = await _require_workspace_member(db, workspace_id, identity, require_admin=True)
+    return await test_vault_endpoint(ws.github_login, fallback_id, None, db)
+
+
+@app.get("/api/workspaces/{workspace_id}/billing", tags=["Billing"])
+async def get_workspace_billing(
+    workspace_id: str,
+    identity: dict[str, Any] = Depends(_require_identity),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return workspace subscription state, active committers for current cycle, and recent review usage."""
+    ws, member = await _require_workspace_member(db, workspace_id, identity, require_admin=False)
+    period = current_billing_period(ws)
+
+    seats_res = await db.execute(
+        select(WorkspaceActiveCommitter)
+        .where(
+            WorkspaceActiveCommitter.workspace_id == ws.id,
+            WorkspaceActiveCommitter.billing_period == period,
+        )
+        .order_by(WorkspaceActiveCommitter.last_seen_at.desc())
+    )
+    seats = list(seats_res.scalars().all())
+
+    usage_res = await db.execute(
+        select(ReviewUsageEvent)
+        .where(ReviewUsageEvent.workspace_id == ws.id)
+        .order_by(ReviewUsageEvent.created_at.desc())
+        .limit(20)
+    )
+    recent_usage = list(usage_res.scalars().all())
+
+    return {
+        "workspace": await _serialize_workspace(db, ws, member.role),
+        "billing_period": period,
+        "managed_monthly_review_cap_per_seat": settings.MANAGED_MONTHLY_REVIEW_CAP_PER_SEAT,
+        "active_committers": [
+            {
+                "github_author_id": s.github_author_id,
+                "github_author_login": s.github_author_login,
+                "review_count": s.review_count,
+                "managed_review_count": s.managed_review_count,
+                "meter_reported": s.meter_reported_at is not None,
+                "first_seen_at": s.first_seen_at.isoformat() if s.first_seen_at else None,
+                "last_seen_at": s.last_seen_at.isoformat() if s.last_seen_at else None,
+            }
+            for s in seats
+        ],
+        "recent_reviews": [
+            {
+                "id": u.id,
+                "repo_full_name": u.repo_full_name,
+                "is_private": u.is_private,
+                "pr_number": u.pr_number,
+                "github_author_login": u.github_author_login,
+                "trigger_type": u.trigger_type,
+                "key_mode": u.key_mode,
+                "provider": u.provider,
+                "model": u.model,
+                "created_at": u.created_at.isoformat() if u.created_at else None,
+            }
+            for u in recent_usage
+        ],
+    }
+
+
+@app.patch("/api/workspaces/{workspace_id}/billing/settings", tags=["Billing"])
+async def update_workspace_billing_settings(
+    workspace_id: str,
+    body: WorkspaceBillingSettingsRequest,
+    identity: dict[str, Any] = Depends(_require_identity),
+    db: AsyncSession = Depends(get_db),
+):
+    """Update workspace key mode ('managed' | 'byok') and optional monthly active-committer cap (admin only)."""
+    ws, member = await _require_workspace_member(db, workspace_id, identity, require_admin=True)
+
+    if body.key_mode is not None:
+        mode_clean = body.key_mode.strip().lower()
+        if mode_clean not in {"managed", "byok"}:
+            raise HTTPException(status_code=400, detail="key_mode must be 'managed' or 'byok'")
+        if mode_clean == "managed" and settings.BILLING_ENABLED and not is_workspace_subscribed(ws):
+            raise HTTPException(
+                status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                detail="An active PatchPilot Pro subscription is required for Managed AI mode.",
+            )
+        ws.key_mode = mode_clean
+
+    if body.clear_seat_cap:
+        ws.seat_cap = None
+    elif body.seat_cap is not None:
+        if body.seat_cap < 1:
+            raise HTTPException(status_code=400, detail="seat_cap must be at least 1")
+        ws.seat_cap = int(body.seat_cap)
+
+    ws.updated_at = datetime.now(timezone.utc)
+    await db.commit()
+    await db.refresh(ws)
+    return {"status": "ok", "workspace": await _serialize_workspace(db, ws, member.role)}
+
+
+@app.post("/api/workspaces/{workspace_id}/billing/checkout", tags=["Billing"])
+async def create_workspace_checkout(
+    workspace_id: str,
+    request: Request,
+    identity: dict[str, Any] = Depends(_require_identity),
+    db: AsyncSession = Depends(get_db),
+):
+    """Create a hosted Polar.sh checkout session for PatchPilot Pro (workspace owner/admin only)."""
+    ws, _ = await _require_workspace_member(db, workspace_id, identity, require_admin=True)
+    origin = _request_origin(request)
+    success_url = f"{origin}/dashboard?workspace={ws.id}&tab=billing&checkout=success"
+    forwarded_for = (request.headers.get("x-forwarded-for") or "").split(",")[0].strip()
+    customer_ip = forwarded_for or (request.client.host if request.client else None)
+
+    try:
+        billing_client = PolarBillingClient()
+        checkout_url = await billing_client.create_checkout_url(
+            workspace=ws,
+            customer_email=ws.billing_email or identity.get("email") or None,
+            success_url=success_url,
+            customer_ip=customer_ip,
+        )
+        return {"checkout_url": checkout_url}
+    except BillingProviderError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+
+
+@app.post("/api/workspaces/{workspace_id}/billing/portal", tags=["Billing"])
+async def create_workspace_portal(
+    workspace_id: str,
+    identity: dict[str, Any] = Depends(_require_identity),
+    db: AsyncSession = Depends(get_db),
+):
+    """Create a hosted Polar.sh customer portal session for managing payment methods and invoices (admin only)."""
+    ws, _ = await _require_workspace_member(db, workspace_id, identity, require_admin=True)
+    if not ws.polar_customer_id and not is_workspace_subscribed(ws):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No billing profile found for this workspace yet. Subscribe to Pro first.",
+        )
+
+    try:
+        billing_client = PolarBillingClient()
+        portal_url = await billing_client.create_portal_url(workspace=ws)
+        return {"portal_url": portal_url}
+    except BillingProviderError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
 
 
 # -----------------------------------------------------------------------------
@@ -1112,15 +1779,24 @@ def _vault_has_usable_key(cfg: VaultConfig | None) -> bool:
     return False
 
 
-async def _get_owner_config(owner: str) -> VaultConfig | None:
+async def _get_owner_config(owner: str, workspace: Workspace | None = None) -> VaultConfig | None:
+    """Resolve BYOK VaultConfig strictly scoped to the workspace or owner (zero cross-tenant fallback)."""
     owner_clean = owner.strip().lower()
     async with SessionLocal() as session:
+        if workspace is not None:
+            res_ws = await session.execute(
+                select(VaultConfig).where(VaultConfig.workspace_id == workspace.id)
+            )
+            ws_cfg = res_ws.scalar_one_or_none()
+            if _vault_has_usable_key(ws_cfg):
+                return ws_cfg
+
         result = await session.execute(select(VaultConfig).where(VaultConfig.owner == owner_clean))
         cfg = result.scalar_one_or_none()
         if _vault_has_usable_key(cfg):
             return cfg
 
-        # Resolve only explicit account links in SQL, without loading every user's keys.
+        # Resolve only explicit account links in SQL, never other tenants' keys.
         linked = await session.execute(
             select(VaultConfig)
             .join(UserAccount, VaultConfig.owner == UserAccount.login)
@@ -1131,20 +1807,51 @@ async def _get_owner_config(owner: str) -> VaultConfig | None:
             if _vault_has_usable_key(row):
                 return row
 
-        if cfg is None:
-            single_key_rows = (
-                await session.execute(
-                    select(VaultConfig).where(VaultConfig.encrypted_api_key != "")
-                )
-            ).scalars().all()
-            if len(single_key_rows) == 1 and _vault_has_usable_key(single_key_rows[0]):
-                return single_key_rows[0]
-
         return cfg
 
 
+async def _post_entitlement_blocked_notice(
+    *,
+    installation_id: int | str,
+    repo_full_name: str,
+    pr_number: int,
+    head_sha: str | None,
+    command: str,
+    message: str,
+    review_comment_id: int | str | None = None,
+) -> None:
+    """Post a clean, emoji-free billing/setup action notice on GitHub when entitlement blocks execution."""
+    if not settings.GITHUB_PRIVATE_KEY.strip():
+        return
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            token = await get_installation_token(installation_id, client=client)
+            if head_sha:
+                check_handle = await start_check_indicator(
+                    token, repo_full_name, head_sha, command=command, client=client
+                )
+                await complete_check_indicator(
+                    token,
+                    repo_full_name,
+                    check_handle,
+                    verdict="WARN",
+                    summary_text=message[:120],
+                    client=client,
+                )
+            await post_comment_reply(
+                token=token,
+                repo_full_name=repo_full_name,
+                pr_number=pr_number,
+                body=message,
+                review_comment_id=review_comment_id,
+                client=client,
+            )
+    except Exception as exc:
+        logger.debug("Could not post entitlement notice on %s#%s: %s", repo_full_name, pr_number, exc)
+
+
 async def handle_pr_event(payload: dict[str, Any]) -> None:
-    """Background task to fetch PR diff, scan secrets, triage risk, run review, and publish comments."""
+    """Background task to fetch PR diff, enforce entitlements, scan secrets, triage risk, run review, and meter seats."""
     pending_review = check_handle = None
     token = repo_full_name = ""
     pr_number = 0
@@ -1183,12 +1890,51 @@ async def handle_pr_event(payload: dict[str, Any]) -> None:
             logger.warning("Rate limit reached for %s: %s", repo_full_name, rate_msg)
             return
 
-        cfg = await _get_owner_config(owner)
+        pr_user = pr.get("user") or {}
+        pr_author = pr_user.get("login") or owner
+        pr_author_id = int(pr_user["id"]) if pr_user.get("id") is not None else None
+        pr_author_type = pr_user.get("type")
+
+        async with SessionLocal() as ent_db:
+            workspace = await resolve_workspace_for_webhook(ent_db, payload)
+            byok_cfg = await _get_owner_config(owner, workspace=workspace)
+            decision = await evaluate_review_entitlement(
+                ent_db,
+                workspace,
+                is_private=is_private,
+                github_author_id=pr_author_id,
+                github_author_login=pr_author,
+                author_type=pr_author_type,
+                has_byok_key=_vault_has_usable_key(byok_cfg),
+            )
+
+        if not decision.allowed:
+            logger.info(
+                "Entitlement blocked PR review for %s#%s: %s",
+                repo_full_name,
+                pr_number,
+                decision.reason_code,
+            )
+            if decision.user_message:
+                await _post_entitlement_blocked_notice(
+                    installation_id=installation_id,
+                    repo_full_name=repo_full_name,
+                    pr_number=pr_number,
+                    head_sha=head_sha,
+                    command="review",
+                    message=decision.user_message,
+                )
+            return
+
+        if decision.effective_key_mode == "managed":
+            custom_policy = byok_cfg.review_policy if byok_cfg else DEFAULT_POLICY
+            cfg = build_managed_vault_config(owner, review_policy=custom_policy)
+        else:
+            cfg = byok_cfg
+
         if not cfg:
             logger.warning("No vault configuration found for %s. Skipping review.", owner)
             return
-
-        pr_author = pr.get("user", {}).get("login") or owner
 
         async with httpx.AsyncClient(timeout=60.0) as client:
             token = await get_installation_token(installation_id, client=client)
@@ -1349,6 +2095,33 @@ async def handle_pr_event(payload: dict[str, Any]) -> None:
                 summary_text=str(review_data.get("summary", "PatchPilot verification completed.")),
                 client=client,
             )
+            if workspace is not None:
+                job_obj = current_job.get()
+                usage_meta = review_data.get("_usage") or {}
+                try:
+                    async with SessionLocal() as usage_db:
+                        ws_live = await usage_db.get(Workspace, workspace.id)
+                        if ws_live is not None:
+                            await record_completed_review(
+                                usage_db,
+                                workspace=ws_live,
+                                event_id=job_obj.id if job_obj else uuid.uuid4().hex,
+                                repo_full_name=repo_full_name,
+                                is_private=is_private,
+                                pr_number=int(pr_number),
+                                github_author_id=pr_author_id,
+                                github_author_login=pr_author,
+                                author_type=pr_author_type,
+                                trigger_type="pr_review",
+                                key_mode=decision.effective_key_mode,
+                                provider=str(review_data.get("_provider") or cfg.provider),
+                                model=str(review_data.get("_model") or cfg.model),
+                                prompt_tokens=usage_meta.get("prompt_tokens"),
+                                completion_tokens=usage_meta.get("completion_tokens"),
+                            )
+                    await flush_unreported_seat_events(limit=5)
+                except Exception as meter_exc:
+                    logger.warning("Usage/meter recording warning for %s#%s: %s", repo_full_name, pr_number, meter_exc)
             logger.info("Published review and triage for %s#%s (size: %s, risk: %s)", repo_full_name, pr_number, triage.size_tier, triage.risk_level)
     except Exception as exc:
         logger.exception("Failed processing PR review webhook: %s", exc)
@@ -1415,7 +2188,49 @@ async def handle_comment_event(event_type: str, payload: dict[str, Any]) -> None
             logger.warning("Rate limit reached for %s: %s", repo_full_name, rate_msg)
             return
 
-        cfg = await _get_owner_config(owner)
+        comment_user_obj = comment.get("user") or payload.get("sender") or {}
+        comment_user_id = int(comment_user_obj["id"]) if comment_user_obj.get("id") is not None else None
+        is_private = bool(repository.get("private", False))
+
+        async with SessionLocal() as ent_db:
+            workspace = await resolve_workspace_for_webhook(ent_db, payload)
+            byok_cfg = await _get_owner_config(owner, workspace=workspace)
+            decision = await evaluate_review_entitlement(
+                ent_db,
+                workspace,
+                is_private=is_private,
+                github_author_id=comment_user_id,
+                github_author_login=comment_user,
+                author_type=sender_type,
+                has_byok_key=_vault_has_usable_key(byok_cfg),
+            )
+
+        if not decision.allowed:
+            logger.info(
+                "Entitlement blocked interactive command '%s' on %s#%s: %s",
+                command,
+                repo_full_name,
+                pr_number,
+                decision.reason_code,
+            )
+            if decision.user_message:
+                await _post_entitlement_blocked_notice(
+                    installation_id=installation_id,
+                    repo_full_name=repo_full_name,
+                    pr_number=pr_number,
+                    head_sha=None,
+                    command=command,
+                    message=decision.user_message,
+                    review_comment_id=review_comment_id,
+                )
+            return
+
+        if decision.effective_key_mode == "managed":
+            custom_policy = byok_cfg.review_policy if byok_cfg else DEFAULT_POLICY
+            cfg = build_managed_vault_config(owner, review_policy=custom_policy)
+        else:
+            cfg = byok_cfg
+
         if not cfg:
             cfg = VaultConfig(
                 owner=owner.strip().lower(),
@@ -1579,6 +2394,33 @@ async def handle_comment_event(event_type: str, payload: dict[str, Any]) -> None
                         summary_text=str(review_data.get("summary", "PatchPilot verification completed.")),
                         client=client,
                     )
+                    if workspace is not None:
+                        job_obj = current_job.get()
+                        usage_meta = review_data.get("_usage") or {}
+                        try:
+                            async with SessionLocal() as usage_db:
+                                ws_live = await usage_db.get(Workspace, workspace.id)
+                                if ws_live is not None:
+                                    await record_completed_review(
+                                        usage_db,
+                                        workspace=ws_live,
+                                        event_id=job_obj.id if job_obj else uuid.uuid4().hex,
+                                        repo_full_name=repo_full_name,
+                                        is_private=is_private,
+                                        pr_number=int(pr_number),
+                                        github_author_id=comment_user_id,
+                                        github_author_login=comment_user,
+                                        author_type=sender_type,
+                                        trigger_type="command",
+                                        key_mode=decision.effective_key_mode,
+                                        provider=str(review_data.get("_provider") or cfg.provider),
+                                        model=str(review_data.get("_model") or cfg.model),
+                                        prompt_tokens=usage_meta.get("prompt_tokens"),
+                                        completion_tokens=usage_meta.get("completion_tokens"),
+                                    )
+                            await flush_unreported_seat_events(limit=5)
+                        except Exception as meter_exc:
+                            logger.warning("Usage/meter recording warning for command review on %s#%s: %s", repo_full_name, pr_number, meter_exc)
                     logger.info("Published full verified PR review for @%s on %s#%s", comment_user, repo_full_name, pr_number)
                     return
 
@@ -1611,6 +2453,7 @@ async def handle_comment_event(event_type: str, payload: dict[str, Any]) -> None
                     if not has_key
                     else f"Configured provider (`{active_cand['provider']}` / `{active_cand['model']}`) rejected the request or key."
                 )
+                dashboard_url = workspace_billing_url(workspace) if workspace else (f"{settings.app_base_url}/dashboard" if settings.app_base_url else "/dashboard")
                 body_text = strip_emojis(
                     f"## PatchPilot Command Response (`{command}`)\n\n"
                     f"**Requested by:** @{comment_user} &nbsp;|&nbsp; **Status:** `Action Required`\n\n"
@@ -1618,10 +2461,9 @@ async def handle_comment_event(event_type: str, payload: dict[str, Any]) -> None
                     f"PatchPilot received your `{command}` command on `{repo_full_name}#{pr_number}` "
                     f"(diff fetched: `{len(pr_diff):,}` chars), but could not complete the AI analysis: {status_detail}\n\n"
                     f"**How to fix in 30 seconds:**\n"
-                    f"1. Open the **[PatchPilot BYOK Vault Dashboard](https://patchpilot.noventra.org.in/dashboard)**.\n"
-                    f"2. Set **GitHub Owner / Org** to `{owner.strip().lower()}` and save a valid API key "
-                    f"(e.g. a free **Google Gemini** or **Groq** key).\n"
-                    f"3. Comment `@patchpilot-app[bot] {command}` again on this PR."
+                    f"1. Open the PatchPilot Dashboard (`{dashboard_url}`).\n"
+                    f"2. Select workspace `{owner.strip().lower()}` and save a valid API key or enable Managed AI.\n"
+                    f"3. Comment `@patchpilot {command}` again on this PR."
                 )
                 if check_handle:
                     await complete_check_indicator(
@@ -1664,6 +2506,30 @@ async def handle_comment_event(event_type: str, payload: dict[str, Any]) -> None
                     review_comment_id=review_comment_id,
                     client=client,
                 )
+            if workspace is not None and "Action Required" not in body_text:
+                job_obj = current_job.get()
+                try:
+                    async with SessionLocal() as usage_db:
+                        ws_live = await usage_db.get(Workspace, workspace.id)
+                        if ws_live is not None:
+                            await record_completed_review(
+                                usage_db,
+                                workspace=ws_live,
+                                event_id=job_obj.id if job_obj else uuid.uuid4().hex,
+                                repo_full_name=repo_full_name,
+                                is_private=is_private,
+                                pr_number=int(pr_number),
+                                github_author_id=comment_user_id,
+                                github_author_login=comment_user,
+                                author_type=sender_type,
+                                trigger_type="command",
+                                key_mode=decision.effective_key_mode,
+                                provider=str(cfg.provider),
+                                model=str(cfg.model),
+                            )
+                    await flush_unreported_seat_events(limit=5)
+                except Exception as meter_exc:
+                    logger.warning("Usage/meter recording warning for command reply on %s#%s: %s", repo_full_name, pr_number, meter_exc)
             logger.info("Replied to %s command on %s#%s", command, repo_full_name, pr_number)
     except Exception as exc:
         logger.exception("Failed processing interactive comment: %s", exc)
@@ -1697,6 +2563,32 @@ async def github_webhook(
     payload = await request.json()
     action = payload.get("action", "")
 
+    # 0. GitHub App Installation Lifecycle Events (multi-tenant workspace sync)
+    if x_github_event == "installation" and action in (
+        "created",
+        "deleted",
+        "suspend",
+        "unsuspend",
+        "new_permissions_accepted",
+    ):
+        installation_obj = payload.get("installation") or {}
+        async with SessionLocal() as ws_db:
+            ws = await upsert_workspace_from_installation(ws_db, installation_obj, action=action)
+        return {
+            "status": "installation_synced",
+            "workspace_id": ws.id if ws else None,
+            "installation_status": ws.installation_status if ws else None,
+        }
+
+    if x_github_event == "installation_repositories":
+        installation_obj = payload.get("installation") or {}
+        async with SessionLocal() as ws_db:
+            ws = await upsert_workspace_from_installation(ws_db, installation_obj, action="sync")
+        return {
+            "status": "installation_repos_synced",
+            "workspace_id": ws.id if ws else None,
+        }
+
     # 1. Pull Request Events
     if x_github_event == "pull_request" and action in ("opened", "synchronize", "reopened"):
         if not payload.get("pull_request", {}).get("draft", False):
@@ -1728,3 +2620,83 @@ async def github_webhook(
         return {"status": "ignored_comment"}
 
     return {"status": "ignored_event"}
+
+
+# -----------------------------------------------------------------------------
+# Polar.sh Billing & Clerk Auth Webhooks (Public, Signature-Verified Only)
+# -----------------------------------------------------------------------------
+
+@app.post("/webhooks/polar", tags=["Webhook"])
+async def polar_webhook(request: Request, db: AsyncSession = Depends(get_db)):
+    """Receive and verify Polar.sh subscription lifecycle webhooks (Standard Webhooks)."""
+    raw_body = await request.body()
+    try:
+        result = await process_polar_webhook(db, raw_body, request.headers)
+        return result
+    except WebhookVerificationError as exc:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
+
+
+@app.post("/webhooks/clerk", tags=["Webhook"])
+async def clerk_webhook(request: Request, db: AsyncSession = Depends(get_db)):
+    """Receive and verify Clerk user lifecycle webhooks (`user.updated`, `user.deleted`)."""
+    raw_body = await request.body()
+    try:
+        event_id, payload = verify_standard_webhook(
+            raw_body,
+            request.headers,
+            settings.CLERK_WEBHOOK_SIGNING_SECRET,
+        )
+    except WebhookVerificationError as exc:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
+
+    existing = await db.get(BillingWebhookEvent, event_id)
+    if existing is not None:
+        return {"status": "duplicate", "event_id": event_id}
+
+    evt_type = str(payload.get("type") or "").strip()
+    data = payload.get("data") or {}
+
+    db.add(
+        BillingWebhookEvent(
+            event_id=event_id,
+            provider="clerk",
+            event_type=evt_type or "unknown",
+            processed_at=datetime.now(timezone.utc),
+        )
+    )
+    try:
+        await db.flush()
+    except IntegrityError:
+        await db.rollback()
+        return {"status": "duplicate", "event_id": event_id}
+
+    clerk_user_id = str(data.get("id") or "").strip()
+    if evt_type == "user.deleted" and clerk_user_id:
+        await db.execute(delete(WorkspaceMember).where(WorkspaceMember.clerk_user_id == clerk_user_id))
+        await db.execute(delete(UserAccount).where(UserAccount.clerk_id == clerk_user_id))
+        await db.commit()
+        return {"status": "deleted", "event_id": event_id, "clerk_id": clerk_user_id}
+
+    if evt_type == "user.updated" and clerk_user_id:
+        res = await db.execute(select(UserAccount).where(UserAccount.clerk_id == clerk_user_id))
+        user_rec = res.scalar_one_or_none()
+        if user_rec is not None:
+            emails = data.get("email_addresses") or []
+            primary_id = data.get("primary_email_address_id")
+            for item in emails:
+                if isinstance(item, dict) and (item.get("id") == primary_id or not user_rec.email):
+                    if item.get("email_address"):
+                        user_rec.email = str(item["email_address"])
+            first = data.get("first_name") or ""
+            last = data.get("last_name") or ""
+            full_name = f"{first} {last}".strip()
+            if full_name:
+                user_rec.name = full_name
+            if data.get("image_url"):
+                user_rec.avatar_url = str(data["image_url"])
+        await db.commit()
+        return {"status": "updated", "event_id": event_id, "clerk_id": clerk_user_id}
+
+    await db.commit()
+    return {"status": "ignored", "event_id": event_id, "type": evt_type}

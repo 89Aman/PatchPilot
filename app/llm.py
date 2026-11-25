@@ -4,8 +4,9 @@ import os
 import re
 from typing import Any
 import httpx
-from app.crypto import decrypt_secret
-from app.db import VaultConfig
+from app.config import settings
+from app.crypto import decrypt_secret, encrypt_secret
+from app.db import DEFAULT_POLICY, VaultConfig
 from app.github_auth import strip_emojis
 from app.security import sanitize_diff_text
 
@@ -322,7 +323,50 @@ def sanitize_failure_reason(status_code: int | None, exc: Exception | None = Non
     return f"Provider error ({status_code})" if status_code else "Connection failed"
 
 
-def get_provider_candidates(cfg: VaultConfig) -> list[dict[str, Any]]:
+def build_managed_vault_config(
+    owner: str,
+    review_policy: str | None = None,
+) -> VaultConfig | None:
+    """Build an ephemeral in-memory VaultConfig backed by PatchPilot's server-side Managed AI pool."""
+    primary_provider = settings.MANAGED_LLM_PRIMARY_PROVIDER.strip().lower() or "gemini"
+    primary_model = settings.MANAGED_LLM_PRIMARY_MODEL.strip() or "gemini-2.5-flash"
+    primary_key = settings.MANAGED_LLM_PRIMARY_API_KEY.strip()
+    primary_base_url = settings.MANAGED_LLM_PRIMARY_BASE_URL.strip() or None
+
+    fb_provider = settings.MANAGED_LLM_FALLBACK_PROVIDER.strip().lower()
+    fb_model = settings.MANAGED_LLM_FALLBACK_MODEL.strip()
+    fb_key = settings.MANAGED_LLM_FALLBACK_API_KEY.strip()
+    fb_base_url = settings.MANAGED_LLM_FALLBACK_BASE_URL.strip() or None
+
+    has_primary = bool(primary_key) or primary_provider == "ollama"
+    has_fallback = bool(fb_key and fb_provider and fb_model)
+    if not has_primary and not has_fallback:
+        return None
+
+    fallbacks: list[dict[str, Any]] = []
+    if has_fallback:
+        fallbacks.append({
+            "id": "managed_fallback_1",
+            "name": "Managed Fallback",
+            "provider": fb_provider,
+            "model": fb_model,
+            "encrypted_api_key": encrypt_secret(fb_key),
+            "base_url": fb_base_url,
+            "is_enabled": True,
+        })
+
+    return VaultConfig(
+        owner=owner.strip().lower(),
+        provider=primary_provider,
+        model=primary_model,
+        encrypted_api_key=encrypt_secret(primary_key) if primary_key else "",
+        base_url=primary_base_url,
+        review_policy=(review_policy or DEFAULT_POLICY),
+        fallbacks_json=json.dumps(fallbacks),
+    )
+
+
+def get_provider_candidates(cfg: VaultConfig, *, allow_fallbacks: bool = True) -> list[dict[str, Any]]:
     """Extract ordered list of provider candidates: Primary first, followed by enabled fallbacks."""
     candidates = [
         {
@@ -336,7 +380,7 @@ def get_provider_candidates(cfg: VaultConfig) -> list[dict[str, Any]]:
         }
     ]
 
-    if getattr(cfg, "fallbacks_json", None):
+    if allow_fallbacks and getattr(cfg, "fallbacks_json", None):
         try:
             raw = json.loads(cfg.fallbacks_json)
             if isinstance(raw, list):
@@ -374,7 +418,7 @@ def _resolve_candidate_endpoint_and_headers(candidate: dict[str, Any]) -> tuple[
         "Authorization": f"Bearer {api_key}",
     }
     if str(candidate["provider"]).lower() == "openrouter":
-        headers["HTTP-Referer"] = "https://github.com/89Aman/PatchPilot"
+        headers["HTTP-Referer"] = settings.app_base_url or "https://github.com/PatchPilot"
         headers["X-Title"] = "PatchPilot Reviewer"
     return url, headers
 
@@ -662,7 +706,9 @@ async def run_pr_review(
                         continue
                     _check_response_status(resp, cand)
 
-                content = resp.json()["choices"][0]["message"]["content"]
+                resp_json = resp.json()
+                content = resp_json["choices"][0]["message"]["content"]
+                usage_raw = resp_json.get("usage") if isinstance(resp_json, dict) else None
                 data = extract_json_payload(content)
 
                 if not isinstance(data, dict) or data.get("_parse_error") or not isinstance(data.get("findings"), list) or data.get("verdict") not in {"PASS", "WARN", "BLOCK"}:
@@ -796,6 +842,14 @@ async def run_pr_review(
                         "provider": cand.get("provider"),
                         "model": cand.get("model"),
                         "primary_reason": sanitized_primary_reason or "Primary provider unavailable",
+                    }
+
+                data["_provider"] = cand.get("provider", cfg.provider)
+                data["_model"] = cand.get("model", cfg.model)
+                if isinstance(usage_raw, dict):
+                    data["_usage"] = {
+                        "prompt_tokens": usage_raw.get("prompt_tokens"),
+                        "completion_tokens": usage_raw.get("completion_tokens"),
                     }
 
                 return data

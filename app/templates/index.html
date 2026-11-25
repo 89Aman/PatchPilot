@@ -10,24 +10,24 @@
   <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
   <meta name="description"
     content="PatchPilot is a self-hosted, multi-provider Bring-Your-Own-Key (BYOK) GitHub App and AI Pull Request review engine. Encrypted AES-256-GCM vault with Gemini, Claude, OpenAI, Groq, and Ollama support." />
-  <link rel="canonical" href="https://patchpilot.noventra.org.in/" />
+  <link rel="canonical" href="{{ app_base_url }}/" />
 
   <!-- Open Graph / Facebook -->
   <meta property="og:type" content="website" />
-  <meta property="og:url" content="https://patchpilot.noventra.org.in/" />
-  <meta property="og:title" content="PatchPilot — AI Code Reviews for GitHub (BYOK & Self-Hosted)" />
+  <meta property="og:url" content="{{ app_base_url }}/" />
+  <meta property="og:title" content="PatchPilot — AI Code Reviews for GitHub (Managed AI & BYOK)" />
   <meta property="og:description"
-    content="Automate PR reviews with zero data retention and Bring-Your-Own-Key support for Gemini, Claude, OpenAI, and Groq." />
-  <meta property="og:image" content="https://patchpilot.noventra.org.in/logo.png" />
+    content="Automate PR reviews with zero data retention, zero-config Managed AI, or encrypted BYOK support for Gemini, Claude, OpenAI, and Groq." />
+  <meta property="og:image" content="{{ app_base_url }}/logo.png" />
   <meta property="og:site_name" content="PatchPilot" />
 
   <!-- Twitter -->
   <meta name="twitter:card" content="summary_large_image" />
-  <meta name="twitter:url" content="https://patchpilot.noventra.org.in/" />
-  <meta name="twitter:title" content="PatchPilot — AI Code Reviews for GitHub (BYOK & Self-Hosted)" />
+  <meta name="twitter:url" content="{{ app_base_url }}/" />
+  <meta name="twitter:title" content="PatchPilot — AI Code Reviews for GitHub (Managed AI & BYOK)" />
   <meta name="twitter:description"
-    content="Automate PR reviews with zero data retention and Bring-Your-Own-Key support for Gemini, Claude, OpenAI, and Groq." />
-  <meta name="twitter:image" content="https://patchpilot.noventra.org.in/logo.png" />
+    content="Automate PR reviews with zero data retention, zero-config Managed AI, or encrypted BYOK support for Gemini, Claude, OpenAI, and Groq." />
+  <meta name="twitter:image" content="{{ app_base_url }}/logo.png" />
 
   <!-- Schema.org Structured Data -->
   <script type="application/ld+json">
@@ -37,13 +37,8 @@
     "name": "PatchPilot",
     "applicationCategory": "DeveloperApplication",
     "operatingSystem": "Linux, macOS, Windows, Docker",
-    "description": "Self-hosted, multi-provider Bring-Your-Own-Key (BYOK) GitHub App and AI Pull Request review engine.",
-    "url": "https://patchpilot.noventra.org.in/",
-    "offers": {
-      "@type": "Offer",
-      "price": "0",
-      "priceCurrency": "USD"
-    }
+    "description": "Multi-provider Managed AI & Bring-Your-Own-Key (BYOK) GitHub App and AI Pull Request review engine.",
+    "url": "{{ app_base_url }}/"
   }
   </script>
 
@@ -139,12 +134,13 @@
       <nav class="hidden md:flex items-center gap-8 text-sm font-medium text-slate-400">
         <a href="#features" class="hover:text-white transition-colors">Features</a>
         <a href="#how-it-works" class="hover:text-white transition-colors">How It Works</a>
+        <a href="/pricing" class="hover:text-white transition-colors">Pricing</a>
         <a href="/docs" class="hover:text-white transition-colors">Docs</a>
       </nav>
 
       <!-- Right CTAs -->
       <div class="flex items-center gap-3">
-        <a href="https://github.com/apps/patchpilot-app/installations/new" target="_blank" rel="noreferrer"
+        <a href="{{ install_url }}" target="_blank" rel="noreferrer"
           class="hidden sm:inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-white/10 text-xs font-medium text-slate-300 hover:text-white hover:bg-white/5 transition">
           <span class="material-symbols-outlined text-sm text-brand-400">add_moderator</span>
           <span>Install App</span>
@@ -414,11 +410,9 @@
 
             <!-- Scorecard row -->
             <div class="flex items-center gap-1.5 text-[9px]">
-              <span class="px-1.5 py-0.5 rounded bg-emerald-950/60 text-emerald-300 border border-emerald-800/40">🔴 0
-                Bugs</span>
-              <span class="px-1.5 py-0.5 rounded bg-amber-950/60 text-amber-300 border border-amber-800/40">🟡 1
-                Risk</span>
-              <span class="px-1.5 py-0.5 rounded bg-blue-950/60 text-blue-300 border border-blue-800/40">🔵 1 Nit</span>
+              <span class="px-1.5 py-0.5 rounded bg-emerald-950/60 text-emerald-300 border border-emerald-800/40">0 Bugs</span>
+              <span class="px-1.5 py-0.5 rounded bg-amber-950/60 text-amber-300 border border-amber-800/40">1 Risk</span>
+              <span class="px-1.5 py-0.5 rounded bg-blue-950/60 text-blue-300 border border-blue-800/40">1 Nit</span>
             </div>
 
             <!-- Diff snippet -->
@@ -516,12 +510,11 @@
         <span>Zero Data Leakage Sovereign AI Code Reviews</span>
       </div>
       <div class="flex items-center gap-5 text-slate-400">
+        <a href="/pricing" class="hover:text-white transition">Pricing</a>
         <a href="/docs" class="hover:text-white transition">Docs</a>
         <a href="/privacy" class="hover:text-white transition">Privacy</a>
         <a href="/terms" class="hover:text-white transition">Terms</a>
-        <a href="/dashboard" class="hover:text-white transition">Vault</a>
-        <a href="https://github.com/89Aman/PatchPilot" target="_blank" rel="noreferrer"
-          class="hover:text-white transition">GitHub</a>
+        <a href="/dashboard" class="hover:text-white transition">Dashboard</a>
       </div>
     </div>
   </footer>
@@ -557,6 +550,12 @@
 
   <script>
     let clerkInstance = null;
+    let landingAuthConfig = {
+      publishable_key: "",
+      frontend_api: "",
+      accounts_url: "",
+      github_oauth_configured: false
+    };
 
     function setAuthUIState(isLoggedIn, user = null) {
       const clerkBtn = document.getElementById("navClerkBtn");
@@ -597,14 +596,7 @@
         const res = await fetch("/auth/clerk/session", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            session_token: token,
-            user: {
-              login: clerkInstance.user.username || clerkInstance.user.primaryEmailAddress?.emailAddress?.split("@")[0] || clerkInstance.user.id,
-              name: clerkInstance.user.fullName || clerkInstance.user.username,
-              avatar_url: clerkInstance.user.imageUrl,
-            }
-          })
+          body: JSON.stringify({ session_token: token })
         });
         return res.ok;
       } catch (err) {
@@ -617,24 +609,28 @@
       try {
         const res = await fetch("/auth/clerk/config");
         const cfg = await res.json();
-        if (!cfg.publishable_key) return;
+        landingAuthConfig = cfg || landingAuthConfig;
+        if (!cfg.publishable_key || !cfg.frontend_api) return;
 
-        const domain = cfg.frontend_api || "clerk.noventra.org.in";
+        const domain = cfg.frontend_api;
 
         if (!window.Clerk) {
+          if (!document.querySelector('script[src*="/npm/@clerk/ui"]')) {
+            const s1 = document.createElement("script");
+            s1.defer = true;
+            s1.crossOrigin = "anonymous";
+            s1.src = `https://${domain}/npm/@clerk/ui@1/dist/ui.browser.js`;
+            document.head.appendChild(s1);
+          }
           if (!document.querySelector('script[src*="/npm/@clerk/clerk-js"]')) {
             await new Promise((resolve) => {
               const s = document.createElement("script");
-              s.async = true;
+              s.defer = true;
               s.crossOrigin = "anonymous";
               s.setAttribute("data-clerk-publishable-key", cfg.publishable_key);
-              // Use clerk-js@5 which bundles prebuilt UI components out of the box
-              s.src = `https://${domain}/npm/@clerk/clerk-js@5/dist/clerk.browser.js`;
+              s.src = `https://${domain}/npm/@clerk/clerk-js@6/dist/clerk.browser.js`;
               s.onload = resolve;
-              s.onerror = (e) => {
-                console.warn("Clerk CDN script failed to load (possible adblock):", e);
-                resolve();
-              };
+              s.onerror = resolve;
               document.head.appendChild(s);
             });
           }
@@ -649,27 +645,22 @@
         if (window.Clerk) {
           clerkInstance = window.Clerk;
           if (!clerkInstance.loaded) {
-            const loadOptions = { publishableKey: cfg.publishable_key };
-            if (cfg.frontend_api) {
-              loadOptions.frontendApi = cfg.frontend_api;
-            }
-            await clerkInstance.load(loadOptions);
+            await clerkInstance.load({
+              publishableKey: cfg.publishable_key,
+              frontendApi: domain,
+            });
           }
 
           if (clerkInstance.user) {
             await syncClerkSession();
-            setAuthUIState(true, {
-              login: clerkInstance.user.username || clerkInstance.user.primaryEmailAddress?.emailAddress?.split("@")[0] || clerkInstance.user.id
-            });
+            setAuthUIState(true);
             return;
           }
 
           clerkInstance.addListener(async (emission) => {
             if (emission.user) {
               await syncClerkSession();
-              setAuthUIState(true, {
-                login: emission.user.username || emission.user.primaryEmailAddress?.emailAddress?.split("@")[0] || emission.user.id
-              });
+              setAuthUIState(true);
             } else {
               setAuthUIState(false);
             }
@@ -681,8 +672,24 @@
     }
 
     async function handleClerkAuth() {
-      const target = encodeURIComponent(`${window.location.origin}/dashboard`);
-      window.location.href = `https://accounts.noventra.org.in/sign-in?sign_in_force_redirect_url=${target}&sign_up_force_redirect_url=${target}&redirect_url=${target}`;
+      const targetUrl = `${window.location.origin}/dashboard`;
+      if (clerkInstance && typeof clerkInstance.redirectToSignIn === "function") {
+        await clerkInstance.redirectToSignIn({
+          signInForceRedirectUrl: targetUrl,
+          signUpForceRedirectUrl: targetUrl,
+        });
+        return;
+      }
+      if (landingAuthConfig.accounts_url) {
+        const target = encodeURIComponent(targetUrl);
+        window.location.href = `${landingAuthConfig.accounts_url}/sign-in?sign_in_force_redirect_url=${target}&sign_up_force_redirect_url=${target}&redirect_url=${target}`;
+        return;
+      }
+      if (landingAuthConfig.github_oauth_configured) {
+        window.location.href = "/auth/login";
+        return;
+      }
+      window.location.href = "/dashboard";
     }
 
     async function checkAuthOnLanding() {
