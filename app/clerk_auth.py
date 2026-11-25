@@ -39,6 +39,24 @@ def derive_frontend_api(publishable_key: str | None = None) -> str | None:
         return None
 
 
+def derive_accounts_url(settings=None) -> str:
+    """Derive Clerk Account Portal base URL dynamically without hardcoding domains."""
+    s = settings or get_settings()
+    if s.clerk_accounts_url:
+        return s.clerk_accounts_url
+
+    domain = s.clerk_frontend_api or derive_frontend_api(s.clerk_publishable_key)
+    if not domain:
+        return ""
+
+    if domain.endswith(".clerk.accounts.dev"):
+        prefix = domain.removesuffix(".clerk.accounts.dev")
+        return f"https://{prefix}.accounts.dev"
+    if domain.startswith("clerk."):
+        return f"https://accounts.{domain[len('clerk.'):]}"
+    return ""
+
+
 def get_clerk_jwks_url(settings=None) -> str:
     """Return Clerk JWKS URL based on settings or publishable key domain."""
     s = settings or get_settings()
@@ -87,11 +105,15 @@ async def fetch_clerk_user(user_id: str, client: httpx.AsyncClient | None = None
             if e.get("id") == primary_email_id or not email:
                 email = e.get("email_address", "")
 
-        # Check for GitHub OAuth username
+        # Check for GitHub OAuth username and immutable GitHub user ID
         github_login = None
+        github_user_id: int | None = None
         for acc in data.get("external_accounts") or []:
             if acc.get("provider") in ("oauth_github", "github"):
                 github_login = acc.get("username")
+                raw_ext_id = acc.get("provider_user_id") or acc.get("external_id")
+                if raw_ext_id is not None and str(raw_ext_id).isdigit():
+                    github_user_id = int(str(raw_ext_id))
                 break
 
         first = data.get("first_name") or ""
@@ -106,6 +128,7 @@ async def fetch_clerk_user(user_id: str, client: httpx.AsyncClient | None = None
             "avatar_url": data.get("image_url") or "",
             "email": email,
             "github_username": github_login,
+            "github_user_id": github_user_id,
         }
     except Exception as exc:
         logger.warning("Error fetching Clerk user %s: %s", user_id, exc)
@@ -220,13 +243,17 @@ def extract_clerk_identity(payload: dict[str, Any], user_data: dict[str, Any] | 
     )
 
     github_login = user.get("github_username") or payload.get("github_username") or (username if user.get("github_username") else "")
+    github_user_id = user.get("github_user_id")
+    email = user.get("email") or payload.get("email") or ""
 
     return {
         "login": username,
         "name": name,
         "avatar_url": avatar,
+        "email": email,
         "clerk_id": sub,
         "auth_provider": "clerk",
         "github_username": github_login or "",
+        "github_user_id": github_user_id,
         "github_connected": bool(github_login),
     }

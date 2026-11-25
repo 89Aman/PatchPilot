@@ -1,0 +1,197 @@
+{% extends "guide-base.html" %}
+{% set page_title = "Pricing and Editions" %}
+{% set description = "Decided pricing, edition comparison matrix, and sales contact for PatchPilot." %}
+{% set slug = "pricing" %}
+
+{% block article %}
+<div class="pricing-header">
+  <h1>Pricing &amp; Editions</h1>
+  <p class="lead">Open-source sovereignty for self-hosters, and transparent per-active-developer subscriptions for teams.</p>
+</div>
+
+<div class="cycle-toggle-wrap">
+  <nav class="cycle-toggle" aria-label="Billing cycle selection">
+    <a href="/pricing?cycle=monthly" class="cycle-btn {% if selected_cycle == 'monthly' %}active{% endif %}" data-cycle="monthly">Monthly</a>
+    <a href="/pricing?cycle=annual" class="cycle-btn {% if selected_cycle == 'annual' %}active{% endif %}" data-cycle="annual">Annual <span class="discount">Save up to 22%</span></a>
+  </nav>
+</div>
+
+<div class="pricing-grid">
+  {% for ed in catalog.editions %}
+  <div class="edition-card {% if ed.highlight %}highlight{% endif %}" id="edition-{{ ed.id }}">
+    <div class="edition-card-top">
+      <span class="badge">{{ ed.badge }}</span>
+      <h2 class="edition-name">{{ ed.name }}</h2>
+      <p class="edition-tagline">{{ ed.tagline }}</p>
+
+      <div class="price-block">
+        {% if ed.price_display == "Custom" %}
+        <div class="price-val">Custom</div>
+        <div class="price-unit">contract quote</div>
+        {% else %}
+        <div class="price-val">{{ ed.price_display }}</div>
+        <div class="price-unit">{{ ed.unit_display }}</div>
+        {% if ed.equiv_display %}
+        <div class="price-equiv">{{ ed.equiv_display }}</div>
+        {% endif %}
+        {% endif %}
+      </div>
+
+      <p class="scope-desc">{{ ed.scope_description }}</p>
+    </div>
+
+    <div class="card-action">
+      {% if ed.action_type == "link" %}
+      <a href="{{ ed.action_href }}" class="btn-card btn-subtle">{{ ed.action_label }}</a>
+      {% elif ed.action_type == "subscribe" %}
+        {% if ed.checkout_available %}
+        <a href="/dashboard?edition=solo&amp;cycle={{ selected_cycle }}" class="btn-card btn-subtle">{{ ed.action_label }}</a>
+        {% else %}
+        <button type="button" class="btn-card btn-subtle" disabled style="opacity: 0.6; cursor: not-allowed;">{{ ed.action_label }}</button>
+        <p class="avail-notice">{{ ed.availability_message }}</p>
+        {% endif %}
+      {% elif ed.action_type == "contact" %}
+      <button type="button" class="btn-card {% if ed.highlight %}btn-accent{% else %}btn-subtle{% endif %} js-open-contact" data-plan="{{ ed.id }}" data-plan-name="{{ ed.name }}">{{ ed.action_label }}</button>
+      {% endif %}
+    </div>
+  </div>
+  {% endfor %}
+</div>
+
+<div class="reconciliation-notice">
+  <strong>Team Seat Reconciliation Rule:</strong> {{ catalog.team_reconciliation_rule }}
+</div>
+
+<div class="comparison-wrap">
+  <h2>Feature Comparison</h2>
+  <div class="table-scroll">
+    <table class="comparison-table">
+      <caption>Comparison of PatchPilot editions and feature entitlements across Limits &amp; Billing, Core PR Review Engine, AI Models &amp; Vault, and Governance, Hosting &amp; Support.</caption>
+      <thead>
+        <tr>
+          <th scope="col">Feature</th>
+          <th scope="col">Self-Hosted</th>
+          <th scope="col">Solo</th>
+          <th scope="col">Team</th>
+          <th scope="col">Enterprise</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for group in catalog.comparison_groups %}
+        <tr class="group-row">
+          <th colspan="5" scope="colgroup">{{ group.group_name }}</th>
+        </tr>
+        {% for row in group.rows %}
+        <tr>
+          <th scope="row">
+            {{ row.name }}
+            <small>{{ row.description }}</small>
+          </th>
+          {% for eid in ["self_hosted", "solo", "team", "enterprise"] %}
+          {% set cell = row.cells[eid] %}
+          <td class="status-{{ cell.status }}">{{ cell.text }}</td>
+          {% endfor %}
+        </tr>
+        {% endfor %}
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Native Contact Dialog -->
+<dialog id="contactDialog" aria-labelledby="dialogTitle">
+  <div class="dialog-header">
+    <h2 id="dialogTitle" class="dialog-title">Contact Sales</h2>
+    <button type="button" class="btn-close js-close-dialog" aria-label="Close dialog">&times;</button>
+  </div>
+
+  <div id="dialogError" class="alert-box alert-error" style="display: none; margin-bottom: 1rem;"></div>
+  <div id="recommendBanner" class="alert-box alert-recommend" style="display: none; margin-bottom: 1rem;">
+    Workspaces with 6 or more active developers route to Enterprise for custom seat allocations, dedicated SLAs, and VPC support. We have preserved your Team interest and routed this inquiry to our Enterprise team.
+  </div>
+
+  <form id="contactForm" class="dialog-form" novalidate>
+    <input type="hidden" id="requestedPlanInput" name="requested_plan" value="team">
+    <!-- Honeypot field (hidden from legitimate users) -->
+    <input type="text" name="website" id="websiteHoneypot" style="display: none;" tabindex="-1" autocomplete="off">
+
+    <div class="form-row">
+      <div class="form-group">
+        <label for="contactName">Your Name *</label>
+        <input type="text" id="contactName" name="name" required maxlength="200" placeholder="Jane Doe">
+      </div>
+      <div class="form-group">
+        <label for="contactEmail">Work Email *</label>
+        <input type="email" id="contactEmail" name="email" required maxlength="320" placeholder="jane@company.com">
+      </div>
+    </div>
+
+    <div class="form-row">
+      <div class="form-group">
+        <label for="contactCompany">Company or Org *</label>
+        <input type="text" id="contactCompany" name="company_or_org" required maxlength="255" placeholder="Acme Inc">
+      </div>
+      <div class="form-group">
+        <label for="contactTeamSize">Active PR Authors *</label>
+        <select id="contactTeamSize" name="team_size" required>
+          <option value="2-5">2 - 5 developers (Team)</option>
+          <option value="6-15">6 - 15 developers (Enterprise)</option>
+          <option value="16-50">16 - 50 developers (Enterprise)</option>
+          <option value="51+">51+ developers (Enterprise)</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="form-row">
+      <div class="form-group">
+        <label for="contactCycle">Billing Cycle</label>
+        <select id="contactCycle" name="billing_cycle">
+          <option value="annual" {% if selected_cycle == 'annual' %}selected{% endif %}>Annual (Discounted)</option>
+          <option value="monthly" {% if selected_cycle == 'monthly' %}selected{% endif %}>Monthly</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label for="contactDeployment">Deployment Preference</label>
+        <select id="contactDeployment" name="deployment_pref">
+          <option value="hosted_cloud">PatchPilot Cloud (Hosted SaaS)</option>
+          <option value="byok_cloud">PatchPilot Cloud with BYOK Vault</option>
+          <option value="dedicated_vpc">Dedicated VPC / Single-Tenant</option>
+          <option value="self_hosted_support">Self-Hosted with Enterprise Support</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="form-group">
+      <label for="contactMessage">Notes or Custom Requirements (Optional)</label>
+      <textarea id="contactMessage" name="message" rows="3" maxlength="2000" placeholder="Tell us about your team size, repository volume, or compliance requirements..."></textarea>
+    </div>
+
+    <div class="dialog-actions">
+      <button type="button" class="btn-card btn-subtle js-close-dialog" style="width: auto; padding: .65rem 1.2rem;">Cancel</button>
+      <button type="submit" id="submitBtn" class="btn-card btn-accent" style="width: auto; padding: .65rem 1.6rem;">Submit Inquiry</button>
+    </div>
+  </form>
+
+  <div id="dialogSuccess" class="dialog-success" style="display: none;">
+    <h3>Inquiry Received</h3>
+    <p>Thank you! We have received your inquiry and our team will get in touch within one business day.</p>
+    <div>Inquiry ID: <span id="inquiryIdDisplay" class="inquiry-id-tag"></span></div>
+
+    {% if contact_booking_url %}
+    <div class="fallback-links">
+      <a href="{{ contact_booking_url }}" target="_blank" rel="noopener noreferrer">Schedule a demo call directly &rarr;</a>
+    </div>
+    {% endif %}
+    {% if contact_sales_email %}
+    <div class="fallback-links">
+      <span>Direct questions? Email: <a href="mailto:{{ contact_sales_email }}">{{ contact_sales_email }}</a></span>
+    </div>
+    {% endif %}
+
+    <button type="button" class="btn-card btn-subtle js-close-dialog" style="margin-top: 1rem; width: auto; padding: .5rem 1.5rem;">Close</button>
+  </div>
+</dialog>
+
+
+{% endblock %}

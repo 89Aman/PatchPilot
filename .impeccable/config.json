@@ -1,0 +1,17 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "gray-on-color",
+        "value": "*",
+        "files": [
+          "app/static/dashboard.css"
+        ],
+        "createdAt": "2026-11-24T21:10:24.915Z",
+        "reason": "Dashboard source uses amber-400 only on empty status dots. Generated utility classes cannot establish which colors occur together in an element."
+      }
+    ]
+  }
+}

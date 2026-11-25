@@ -4,8 +4,9 @@ import os
 import re
 from typing import Any
 import httpx
-from app.crypto import decrypt_secret
-from app.db import VaultConfig
+from app.config import settings
+from app.crypto import decrypt_secret, encrypt_secret
+from app.db import DEFAULT_POLICY, VaultConfig
 from app.github_auth import strip_emojis
 from app.security import sanitize_diff_text
 
@@ -311,7 +312,50 @@ def sanitize_failure_reason(status_code: int | None, exc: Exception | None = Non
     return f"Provider error ({status_code})" if status_code else "Connection failed"
 
 
-def get_provider_candidates(cfg: VaultConfig) -> list[dict[str, Any]]:
+def build_managed_vault_config(
+    owner: str,
+    review_policy: str | None = None,
+) -> VaultConfig | None:
+    """Build an ephemeral in-memory VaultConfig backed by PatchPilot's server-side Managed AI pool."""
+    primary_provider = settings.MANAGED_LLM_PRIMARY_PROVIDER.strip().lower() or "gemini"
+    primary_model = settings.MANAGED_LLM_PRIMARY_MODEL.strip() or "gemini-2.5-flash"
+    primary_key = settings.MANAGED_LLM_PRIMARY_API_KEY.strip()
+    primary_base_url = settings.MANAGED_LLM_PRIMARY_BASE_URL.strip() or None
+
+    fb_provider = settings.MANAGED_LLM_FALLBACK_PROVIDER.strip().lower()
+    fb_model = settings.MANAGED_LLM_FALLBACK_MODEL.strip()
+    fb_key = settings.MANAGED_LLM_FALLBACK_API_KEY.strip()
+    fb_base_url = settings.MANAGED_LLM_FALLBACK_BASE_URL.strip() or None
+
+    has_primary = bool(primary_key) or primary_provider == "ollama"
+    has_fallback = bool(fb_key and fb_provider and fb_model)
+    if not has_primary and not has_fallback:
+        return None
+
+    fallbacks: list[dict[str, Any]] = []
+    if has_fallback:
+        fallbacks.append({
+            "id": "managed_fallback_1",
+            "name": "Managed Fallback",
+            "provider": fb_provider,
+            "model": fb_model,
+            "encrypted_api_key": encrypt_secret(fb_key),
+            "base_url": fb_base_url,
+            "is_enabled": True,
+        })
+
+    return VaultConfig(
+        owner=owner.strip().lower(),
+        provider=primary_provider,
+        model=primary_model,
+        encrypted_api_key=encrypt_secret(primary_key) if primary_key else "",
+        base_url=primary_base_url,
+        review_policy=(review_policy or DEFAULT_POLICY),
+        fallbacks_json=json.dumps(fallbacks),
+    )
+
+
+def get_provider_candidates(cfg: VaultConfig, *, allow_fallbacks: bool = True) -> list[dict[str, Any]]:
     """Extract ordered list of provider candidates: Primary first, followed by enabled fallbacks."""
     candidates = [
         {
@@ -325,7 +369,7 @@ def get_provider_candidates(cfg: VaultConfig) -> list[dict[str, Any]]:
         }
     ]
 
-    if getattr(cfg, "fallbacks_json", None):
+    if allow_fallbacks and getattr(cfg, "fallbacks_json", None):
         try:
             raw = json.loads(cfg.fallbacks_json)
             if isinstance(raw, list):
@@ -363,7 +407,7 @@ def _resolve_candidate_endpoint_and_headers(candidate: dict[str, Any]) -> tuple[
         "Authorization": f"Bearer {api_key}",
     }
     if str(candidate["provider"]).lower() == "openrouter":
-        headers["HTTP-Referer"] = "https://github.com/89Aman/PatchPilot"
+        headers["HTTP-Referer"] = settings.app_base_url or "https://github.com/PatchPilot"
         headers["X-Title"] = "PatchPilot Reviewer"
     return url, headers
 
@@ -498,6 +542,7 @@ async def _verify_findings_with_llm(
 
     verify_system_prompt = (
         "You are PatchPilot Verification Engine, a strict second-pass code review fact-checker.\n"
+        "Redaction placeholders are transport substitutions, never original source. Do not infer bugs from them.\n"
         "Your job is to verify each candidate finding against the annotated diff and eliminate any false positives.\n\n"
         "Verification Rules:\n"
         "1. Check whether the reported issue is genuinely present in the added (`+`) or modified lines of the diff.\n"
@@ -576,6 +621,14 @@ async def run_pr_review(
 ) -> dict[str, Any]:
     """Execute unified 2-pass AI review of pull request with fact-checked findings, architecture diagram, walkthrough, and test stubs."""
     # Apply the privacy boundary to all prompt fields, including context/deletions.
+    redacted_locations = set()
+    active_file = None
+    for raw_line in annotated_diff.splitlines():
+        if raw_line.startswith("--- ") and raw_line.endswith(" ---"):
+            active_file = raw_line[4:-4]
+        match = re.match(r"\[L(\d+)\]", raw_line)
+        if match and sanitize_diff_text(raw_line) != raw_line:
+            redacted_locations.add((active_file, int(match.group(1))))
     annotated_diff = budget_text(sanitize_diff_text(annotated_diff), 32000)
     if valid_lines is not None:
         shown = visible_lines(annotated_diff)
@@ -587,6 +640,7 @@ async def run_pr_review(
     system_prompt = (
         "You are PatchPilot, an expert pull request analysis and verification engine modeled after CodeRabbit.\n"
         f"{policy_section}\n\n"
+        "Redaction placeholders are transport substitutions, never original source. Do not infer bugs from them.\n"
         "Analyze the pull request thoroughly across:\n"
         "1. State-Machine & Idempotency Correctness (missing state/status guards before mutations, double-release or duplicate timeline appends on retry).\n"
         "2. Backend & Data-Layer Consistency (accessing private/mock state like `_mock_*` that fails in production DB mode, mutating Pydantic models without validation).\n"
@@ -680,7 +734,9 @@ async def run_pr_review(
                         continue
                     _check_response_status(resp, cand)
 
-                content = resp.json()["choices"][0]["message"]["content"]
+                resp_json = resp.json()
+                content = resp_json["choices"][0]["message"]["content"]
+                usage_raw = resp_json.get("usage") if isinstance(resp_json, dict) else None
                 data = extract_json_payload(content)
 
                 validate_review(data)
@@ -697,8 +753,12 @@ async def run_pr_review(
                     if not file_path or line is None:
                         continue
 
+                    if (str(file_path), int(line)) in redacted_locations:
+                        continue
                     title_str = strip_emojis(str(f.get("title", ""))).strip()
                     exp_str = strip_emojis(str(f.get("explanation", ""))).strip()
+                    if "[REDACTED_" in exp_str or "[REDACTED_" in str(f.get("suggestion", "")):
+                        continue
                     if "truncated" in title_str.lower() and "omitted" in annotated_diff:
                         continue
 
@@ -744,6 +804,8 @@ async def run_pr_review(
                         if not fp or ln is None:
                             continue
                         ln_int = int(ln)
+                        if (str(fp), ln_int) in redacted_locations:
+                            continue
                         if valid_lines is not None:
                             v_set = valid_lines.get(str(fp), set())
                             if not v_set:
@@ -759,8 +821,12 @@ async def run_pr_review(
                     unverified_findings |= len(final_findings) != len(verified_findings)
                     clean_findings = final_findings
 
+                for finding in clean_findings:
+                    finding["source"] = "llm"
                 data["findings"] = clean_findings
                 data["summary"] = strip_emojis(str(data.get("summary", "Review completed."))).strip()
+                if redacted_locations:
+                    data["summary"] += " Redacted locations were excluded from source-dependent analysis."
                 if data.get("poem"):
                     data["poem"] = strip_emojis(str(data["poem"])).strip()
                 if data.get("architecture_diagram"):
@@ -793,8 +859,8 @@ async def run_pr_review(
                 checks = {
                     "Security": "Clean" if not any("security" in f["title"].lower() or "secret" in f["title"].lower() for f in clean_findings) else "Issues Found",
                     "Correctness": f"{bugs} Defect{'s' if bugs > 1 else ''}" if bugs > 0 else "Clean",
-                    "Performance": "Review Needed" if any("perf" in f["title"].lower() or "o(n" in f["title"].lower() for f in clean_findings) else "Optimal",
-                    "Test Coverage": f"{len(suggested_tests)} Test Case{'s' if len(suggested_tests) > 1 else ''} Suggested" if suggested_tests else "Adequate",
+                    "Performance": "Review Needed" if any("perf" in f["title"].lower() or "o(n" in f["title"].lower() for f in clean_findings) else "No performance finding reported",
+                    "Test Coverage": f"{len(suggested_tests)} Test Case{'s' if len(suggested_tests) > 1 else ''} Suggested" if suggested_tests else "Coverage not measured",
                 }
                 data["review_checks"] = checks
                 data["agent_statuses"] = checks  # Backward compatibility alias
@@ -806,6 +872,14 @@ async def run_pr_review(
                         "provider": cand.get("provider"),
                         "model": cand.get("model"),
                         "primary_reason": sanitized_primary_reason or "Primary provider unavailable",
+                    }
+
+                data["_provider"] = cand.get("provider", cfg.provider)
+                data["_model"] = cand.get("model", cfg.model)
+                if isinstance(usage_raw, dict):
+                    data["_usage"] = {
+                        "prompt_tokens": usage_raw.get("prompt_tokens"),
+                        "completion_tokens": usage_raw.get("completion_tokens"),
                     }
 
                 return data

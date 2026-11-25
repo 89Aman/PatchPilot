@@ -10,6 +10,12 @@ class Settings(BaseSettings):
     MASTER_ENCRYPTION_KEY: str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
     ADMIN_API_TOKEN: str = "super-secret-admin-token-change-me"
 
+    # Public deployment URLs & CORS (never hardcode personal/tenant domains)
+    APP_BASE_URL: str = ""
+    CORS_ALLOWED_ORIGINS: str = ""
+    CORS_ALLOW_ORIGIN_REGEX: str = ""
+    GITHUB_APP_SLUG: str = ""
+
     GITHUB_APP_ID: str = "123456"
     GITHUB_WEBHOOK_SECRET: str = "your_github_webhook_secret_here"
     GITHUB_PRIVATE_KEY: str = ""
@@ -18,13 +24,57 @@ class Settings(BaseSettings):
     GITHUB_CLIENT_ID: str = ""
     GITHUB_CLIENT_SECRET: str = ""
     SESSION_SECRET: str = ""
+    ALLOW_MANUAL_PAT: bool = False
 
-    # Optional Clerk Authentication (clerk.com)
+    # Clerk Authentication (clerk.com)
     CLERK_PUBLISHABLE_KEY: str = ""
     NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: str = ""
     CLERK_SECRET_KEY: str = ""
     CLERK_JWKS_URL: str = ""
     CLERK_FRONTEND_API: str = ""
+    CLERK_ACCOUNTS_URL: str = ""
+    CLERK_WEBHOOK_SIGNING_SECRET: str = ""
+
+    # Workspace Membership Cache TTL (seconds)
+    WORKSPACE_MEMBERSHIP_TTL_SECONDS: int = 900
+
+    # Hosted Commercial Billing (Polar.sh Merchant of Record — per-active-committer)
+    # Default False keeps self-hosted MIT deployments completely open.
+    BILLING_ENABLED: bool = False
+    POLAR_ACCESS_TOKEN: str = ""
+    POLAR_WEBHOOK_SECRET: str = ""
+    POLAR_SERVER: str = "sandbox"
+    POLAR_PRO_PRODUCT_ID: str = ""
+    POLAR_SOLO_MONTHLY_PRODUCT_ID: str = ""
+    POLAR_SOLO_ANNUAL_PRODUCT_ID: str = ""
+
+    @property
+    def solo_checkout_products(self) -> dict[str, str]:
+        if not self.BILLING_ENABLED:
+            return {}
+        return {
+            "solo_monthly": self.POLAR_SOLO_MONTHLY_PRODUCT_ID.strip(),
+            "solo_annual": self.POLAR_SOLO_ANNUAL_PRODUCT_ID.strip(),
+        }
+    POLAR_METER_EVENT_NAME: str = "pr_reviewed"
+    MANAGED_MONTHLY_REVIEW_CAP_PER_SEAT: int = 300
+
+    # Managed AI LLM Provider Pool (used by subscribed workspaces in 'managed' key mode)
+    MANAGED_LLM_PRIMARY_PROVIDER: str = "gemini"
+    MANAGED_LLM_PRIMARY_MODEL: str = "gemini-2.5-flash"
+    MANAGED_LLM_PRIMARY_API_KEY: str = ""
+    MANAGED_LLM_PRIMARY_BASE_URL: str = ""
+
+    MANAGED_LLM_FALLBACK_PROVIDER: str = "groq"
+    MANAGED_LLM_FALLBACK_MODEL: str = "llama-3.3-70b-versatile"
+    MANAGED_LLM_FALLBACK_API_KEY: str = ""
+    MANAGED_LLM_FALLBACK_BASE_URL: str = ""
+
+    # Contact & Sales intake configuration
+    CONTACT_SALES_EMAIL: str = ""
+    CONTACT_BOOKING_URL: str = ""
+    CONTACT_WEBHOOK_URL: str = ""
+    TRUSTED_PROXIES: str = "127.0.0.1,::1"
 
     HOST: str = "0.0.0.0"
     PORT: int = 8080
@@ -47,6 +97,35 @@ class Settings(BaseSettings):
     @property
     def admin_api_token(self) -> str:
         return self.ADMIN_API_TOKEN
+
+    @property
+    def app_base_url(self) -> str:
+        return self.APP_BASE_URL.strip().rstrip("/")
+
+    @property
+    def github_app_slug(self) -> str:
+        return self.GITHUB_APP_SLUG.strip()
+
+    @property
+    def github_app_install_url(self) -> str:
+        slug = self.github_app_slug
+        if slug:
+            return f"https://github.com/apps/{slug}/installations/new"
+        return "https://github.com/settings/installations"
+
+    @property
+    def cors_origins(self) -> list[str]:
+        origins = [
+            "http://localhost:8080",
+            "http://127.0.0.1:8080",
+        ]
+        if self.app_base_url and self.app_base_url not in origins:
+            origins.append(self.app_base_url)
+        for raw in self.CORS_ALLOWED_ORIGINS.split(","):
+            cleaned = raw.strip().rstrip("/")
+            if cleaned and cleaned not in origins:
+                origins.append(cleaned)
+        return origins
 
     @property
     def github_app_id(self) -> str:
@@ -81,8 +160,22 @@ class Settings(BaseSettings):
         return self.CLERK_FRONTEND_API.strip()
 
     @property
+    def clerk_accounts_url(self) -> str:
+        return self.CLERK_ACCOUNTS_URL.strip().rstrip("/")
+
+    @property
+    def polar_api_base_url(self) -> str:
+        if self.POLAR_SERVER.strip().lower() == "production":
+            return "https://api.polar.sh"
+        return "https://sandbox-api.polar.sh"
+
+    @property
     def session_secret(self) -> str:
         return self.SESSION_SECRET or self.ADMIN_API_TOKEN or self.MASTER_ENCRYPTION_KEY[:32]
+
+    @property
+    def trusted_proxies_list(self) -> set[str]:
+        return {ip.strip() for ip in self.TRUSTED_PROXIES.split(",") if ip.strip()}
 
     @field_validator("MASTER_ENCRYPTION_KEY")
     @classmethod

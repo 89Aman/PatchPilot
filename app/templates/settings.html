@@ -28,8 +28,8 @@
           <input
             id="owner"
             type="text"
-            placeholder="e.g. 89Aman or my-org"
-            value="89Aman"
+            placeholder="e.g. your-username or your-org"
+            value=""
             class="w-full bg-slate-950 border border-slate-700/80 rounded-xl px-3.5 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 transition font-mono"
           />
         </div>
@@ -710,13 +710,10 @@
   }
 
   window.addEventListener("DOMContentLoaded", () => {
-    document.getElementById("adminToken").value = localStorage.getItem("cl_admin_token") || "";
-    document.getElementById("owner").value = localStorage.getItem("cl_owner") || "89Aman";
+    document.getElementById("adminToken").value = "";
+    document.getElementById("owner").value = localStorage.getItem("cl_owner") || "";
     setPolicyPreset("standard");
     onProviderChange();
-    if (document.getElementById("adminToken").value) {
-      loadVault();
-    }
   });
 </script>
 {% endblock %}

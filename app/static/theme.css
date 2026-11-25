@@ -1,0 +1,29 @@
+@font-face {
+  font-family: "Barlow Condensed";
+  src: url("/static/fonts/barlow-condensed-bold.woff2") format("woff2");
+  font-weight: 700;
+  font-display: swap;
+}
+:root {
+  color-scheme: dark;
+  --canvas-rgb: 33 28 36;
+  --canvas: rgb(var(--canvas-rgb));
+  --surface-rgb: 44 37 48;
+  --surface: rgb(var(--surface-rgb));
+  --raised-rgb: 60 51 65;
+  --raised: rgb(var(--raised-rgb));
+  --line-rgb: 88 78 93;
+  --line: rgb(var(--line-rgb));
+  --text-rgb: 250 246 239;
+  --text: rgb(var(--text-rgb));
+  --secondary-rgb: 208 197 210;
+  --secondary: rgb(var(--secondary-rgb));
+  --accent-rgb: 215 239 118;
+  --accent: rgb(var(--accent-rgb));
+  --accent-hover-rgb: 231 250 156;
+  --accent-hover: rgb(var(--accent-hover-rgb));
+  --on-accent-rgb: 32 27 36;
+  --on-accent: rgb(var(--on-accent-rgb));
+  --display: "Barlow Condensed", "Arial Narrow", sans-serif;
+  --body: "Segoe UI", Arial, sans-serif;
+}

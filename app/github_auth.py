@@ -33,9 +33,9 @@ def strip_emojis(text: str) -> str:
     if not text:
         return ""
     cleaned = _EMOJI_RE.sub("", text)
-    cleaned = re.sub(r"\|\s{2,}", "| ", cleaned)
-    cleaned = re.sub(r"(#+\s+)\s+", r"\1", cleaned)
-    cleaned = re.sub(r"(>\s+)\s+", r"\1", cleaned)
+    cleaned = re.sub(r"\|[ \t]{2,}", "| ", cleaned)
+    cleaned = re.sub(r"(#+[ \t]+)[ \t]+", r"\1", cleaned)
+    cleaned = re.sub(r"(>[ \t]+)[ \t]+", r"\1", cleaned)
     cleaned = re.sub(r"\*\*([^\*\n]+?)\*\*", lambda m: f"**{m.group(1).strip()}**", cleaned)
     return cleaned
 
@@ -257,12 +257,14 @@ def build_loading_review_card(
         f"| **5. Pass 2 Verification** | Fact-checking candidate findings against ground-truth diff | `{defaults['pass2']}` |",
     ]
 
+    bot_slug = get_settings().github_app_slug
+    bot_label = f"`{bot_slug}[bot]`" if bot_slug else "PatchPilot"
     card = (
         "<!-- patchpilot-ai-review -->\n"
         "## PatchPilot AI PR Review\n\n"
         f"{meta_line}\n\n"
         "> **PatchPilot Engine is actively analyzing this pull request.**\n"
-        "> `patchpilot-app[bot]` has been registered as a reviewer. This card will automatically update in-place with the final report once all security and verification checks complete.\n\n"
+        f"> {bot_label} has been registered as a reviewer. This card will automatically update in-place with the final report once all security and verification checks complete.\n\n"
         "### Live Verification Pipeline\n\n"
         "| Stage | Check Description | Status |\n"
         "| :--- | :--- | :--- |\n"
@@ -523,173 +525,10 @@ def build_review_summary_card(
     findings: list[dict[str, Any]] | None = None,
     verification_status: str | None = None,
     architecture_diagram: str | None = None,
+    repo_full_name: str | None = None,
 ) -> str:
-    """Generate clean, emoji-free CodeRabbit-grade PatchPilot Markdown summary card."""
-    verdict_clean = strip_emojis(verdict).upper().strip() or "PASS"
-    sha_short = commit_sha[:7] if commit_sha else "HEAD"
-
-    user_tag_part = ""
-    if requested_by and requested_by.strip():
-        clean_user = requested_by.strip().lstrip("@")
-        user_tag_part = f"**Requested by:** @{clean_user} &nbsp;|&nbsp; "
-
-    verif_part = ""
-    if verification_status and verification_status.strip():
-        verif_part = f" &nbsp;|&nbsp; **Verification:** `{strip_emojis(verification_status).strip()}`"
-
-    # Failover Alert Notice (if review was completed via fallback provider)
-    failover_notice = ""
-    if fallback_used:
-        cand_provider = str(fallback_used.get("provider", "")).capitalize()
-        cand_model = fallback_used.get("model", "")
-        primary_reason = fallback_used.get("primary_reason", "Provider rate limit or outage")
-        failover_notice = (
-            f"> **Failover Alert**: Primary LLM returned *{primary_reason}*. "
-            f"Review successfully completed via fallback: **{cand_provider}** (`{cand_model}`).\n\n"
-        )
-
-    # Optional Poem Banner
-    poem_section = ""
-    if poem and poem.strip():
-        poem_clean = "\n".join(f"> *{strip_emojis(line).strip()}*" for line in poem.strip().splitlines() if strip_emojis(line).strip())
-        if poem_clean:
-            poem_section = f"{poem_clean}\n\n"
-
-    triage_section = ""
-    if triage_summary:
-        triage_section = f"### Triage & Impact\n\n{strip_emojis(triage_summary).strip()}\n\n"
-
-    # Review Checks Matrix Badges
-    checks_dict = review_checks or agent_statuses
-    checks_section = ""
-    if checks_dict:
-        rows = [
-            f"| **{strip_emojis(str(category)).strip()}** | {strip_emojis(str(status)).strip()} |"
-            for category, status in checks_dict.items()
-        ]
-        checks_section = (
-            "### Review Checks\n\n"
-            "| Category | Status |\n"
-            "| :--- | :--- |\n"
-            + "\n".join(rows)
-            + "\n\n"
-        )
-
-    # File Walkthrough & Architecture Diagram Section
-    walkthrough_section = ""
-    diagram_block = ""
-    if architecture_diagram and architecture_diagram.strip():
-        raw_diag = strip_emojis(architecture_diagram).strip()
-        if raw_diag.startswith("```"):
-            diagram_block = f"{raw_diag}\n\n"
-        else:
-            diagram_block = f"```mermaid\n{raw_diag}\n```\n\n"
-
-    wt_table = ""
-    if walkthrough:
-        wt_rows = [
-            f"| `{item.get('file', '')}` | {strip_emojis(str(item.get('impact', 'Refactor'))).strip() or 'Refactor'} | {strip_emojis(str(item.get('summary', ''))).strip()} |"
-            for item in walkthrough
-            if item.get("file")
-        ]
-        if wt_rows:
-            wt_table = (
-                "| File | Impact | Summary |\n"
-                "| :--- | :--- | :--- |\n"
-                + "\n".join(wt_rows)
-                + "\n\n"
-            )
-
-    if wt_table or diagram_block:
-        walkthrough_section = (
-            "### Changes Walkthrough\n\n"
-            "<details open>\n"
-            "<summary><b>File Walkthrough &amp; Architecture Flow</b></summary>\n\n"
-            f"{diagram_block}"
-            f"{wt_table}"
-            "</details>\n\n"
-        )
-
-    # Verified Findings Detail Section with Prompt for AI Agents
-    verified_findings_section = ""
-    if findings:
-        finding_blocks: list[str] = []
-        for idx, f in enumerate(findings, 1):
-            if not isinstance(f, dict):
-                continue
-            f_file = f.get("file", "unknown")
-            f_line = f.get("line", "")
-            f_sev = strip_emojis(str(f.get("severity", "risk"))).upper().strip() or "RISK"
-            f_title = strip_emojis(str(f.get("title", "Issue Detected"))).strip()
-            f_exp = strip_emojis(str(f.get("explanation") or f.get("comment") or "")).strip()
-            f_sug = str(f.get("suggestion", "")).strip()
-            line_ref = f" (Line {f_line})" if f_line else ""
-            block = f"#### {idx}. [{f_sev}] `{f_file}`{line_ref} — {f_title}\n\n{f_exp}"
-            if f_sug:
-                block += f"\n\n```suggestion\n{f_sug}\n```"
-            agent_prompt = _build_agent_prompt_for_finding(f)
-            block += (
-                "\n\n<details>\n"
-                "<summary><b>Prompt for AI Agents</b></summary>\n\n"
-                f"```text\n{agent_prompt}\n```\n\n"
-                "</details>"
-            )
-            finding_blocks.append(block)
-        if finding_blocks:
-            verified_findings_section = (
-                "### Verified Findings\n\n"
-                + "\n\n---\n\n".join(finding_blocks)
-                + "\n\n"
-            )
-
-    security_status = (
-        f"| Secret Alerts | **{secret_alerts_count} (CRITICAL)** |\n"
-        if secret_alerts_count > 0
-        else "| Secret Scan | Clean (0 exposed keys) |\n"
-    )
-
-    findings_section = (
-        f"### Findings Breakdown\n\n"
-        f"| Category | Status / Count |\n"
-        f"| :--- | :--- |\n"
-        f"{security_status}"
-        f"| Bugs | {bug_count} |\n"
-        f"| Risks | {risk_count} |\n"
-        f"| Nits | {nit_count} |\n\n"
-    )
-
-    # Suggested Unit Tests Section
-    tests_section = ""
-    if suggested_tests:
-        test_blocks = []
-        for idx, st in enumerate(suggested_tests, 1):
-            target = strip_emojis(str(st.get("target_file", "Test"))).strip()
-            desc = strip_emojis(str(st.get("description", "Suggested edge-case test"))).strip()
-            code = str(st.get("code_snippet", "")).strip()
-            test_blocks.append(f"**Test {idx} ({target})**: {desc}\n```python\n{code}\n```")
-        tests_section = (
-            "<details>\n"
-            f"<summary><b>Suggested Unit Tests ({len(suggested_tests)})</b></summary>\n\n"
-            + "\n\n".join(test_blocks)
-            + "\n\n</details>\n"
-        )
-
-    card_body = (
-        f"<!-- patchpilot-ai-review -->\n"
-        f"## PatchPilot AI PR Review\n\n"
-        f"{user_tag_part}**Verdict:** `{verdict_clean}` &nbsp;|&nbsp; **Commit:** `{sha_short}`{verif_part}\n\n"
-        f"{failover_notice}"
-        f"{poem_section}"
-        f"{triage_section}"
-        f"### Executive Summary\n\n"
-        f"{strip_emojis(summary).strip()}\n\n"
-        f"{checks_section}"
-        f"{walkthrough_section}"
-        f"{verified_findings_section}"
-        f"{findings_section}"
-        f"{tests_section}"
-    )
-    return strip_emojis(card_body)
+    from app.review_format import render_review
+    return render_review(locals())
 
 
 async def publish_pr_review(
@@ -706,6 +545,8 @@ async def publish_pr_review(
     existing_review: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Publish native GitHub review with emoji-free summary card, in-place loading card replacement, and verified inline comments."""
+    from app.review_format import finalize_review
+    finalize_review(review_data)
     summary = review_data.get("summary", "Review completed.")
     verdict = review_data.get("verdict", "PASS")
     findings = review_data.get("findings", [])
@@ -741,6 +582,7 @@ async def publish_pr_review(
         findings=findings,
         verification_status=verification_status,
         architecture_diagram=architecture_diagram,
+        repo_full_name=repo_full_name,
     )
 
     comments: list[dict[str, Any]] = []
@@ -776,7 +618,7 @@ async def publish_pr_review(
             "path": file_path,
             "line": int(line),
             "side": "RIGHT",
-            "body": strip_emojis(comment_body),
+            "body": comment_body,
         })
 
     close_client = False
@@ -948,7 +790,7 @@ async def apply_pr_labels(
 
 def get_oauth_authorize_url(client_id: str, redirect_uri: str | None = None, state: str | None = None) -> str:
     """Generate GitHub OAuth authorization URL."""
-    base = f"https://github.com/login/oauth/authorize?client_id={client_id}&scope=read:user,repo"
+    base = f"https://github.com/login/oauth/authorize?client_id={client_id}&scope=read:user,read:org,repo"
     if redirect_uri:
         base += f"&redirect_uri={redirect_uri}"
     if state:
@@ -1057,16 +899,140 @@ async def fetch_user_installations_and_repos(
             await client.aclose()
 
 
+async def fetch_user_app_installations(
+    user_token: str,
+    client: httpx.AsyncClient | None = None,
+) -> list[dict[str, Any]]:
+    """Fetch GitHub App installations accessible to the authenticated user (personal + orgs)."""
+    url = "https://api.github.com/user/installations?per_page=100"
+    headers = {
+        "Authorization": f"Bearer {user_token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+
+    close_client = False
+    if client is None:
+        client = httpx.AsyncClient(timeout=20.0)
+        close_client = True
+
+    try:
+        resp = await client.get(url, headers=headers)
+        if resp.status_code != 200:
+            logger.debug("Could not list user GitHub App installations (%d): %s", resp.status_code, resp.text[:200])
+            return []
+        data = resp.json()
+        installations = data.get("installations") if isinstance(data, dict) else []
+        return installations if isinstance(installations, list) else []
+    except Exception as exc:
+        logger.warning("Error fetching user GitHub App installations: %s", exc)
+        return []
+    finally:
+        if close_client:
+            await client.aclose()
+
+
+async def fetch_user_org_memberships(
+    user_token: str,
+    client: httpx.AsyncClient | None = None,
+) -> dict[str, str]:
+    """Fetch active GitHub Organization roles (`admin` or `member`) keyed by lowercase org login."""
+    url = "https://api.github.com/user/memberships/orgs?state=active&per_page=100"
+    headers = {
+        "Authorization": f"Bearer {user_token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+
+    close_client = False
+    if client is None:
+        client = httpx.AsyncClient(timeout=20.0)
+        close_client = True
+
+    try:
+        resp = await client.get(url, headers=headers)
+        if resp.status_code != 200:
+            logger.debug("Could not list user org memberships (%d): %s", resp.status_code, resp.text[:200])
+            return {}
+        data = resp.json()
+        roles: dict[str, str] = {}
+        if isinstance(data, list):
+            for item in data:
+                if not isinstance(item, dict):
+                    continue
+                org_login = str((item.get("organization") or {}).get("login") or "").strip().lower()
+                role = str(item.get("role") or "member").strip().lower()
+                if org_login:
+                    roles[org_login] = role
+        return roles
+    except Exception as exc:
+        logger.warning("Error fetching user org memberships: %s", exc)
+        return {}
+    finally:
+        if close_client:
+            await client.aclose()
+
+
+async def fetch_installation_repositories(
+    installation_token: str,
+    client: httpx.AsyncClient | None = None,
+) -> list[dict[str, Any]]:
+    """Fetch repositories accessible to a specific GitHub App installation token."""
+    url = "https://api.github.com/installation/repositories?per_page=100"
+    headers = {
+        "Authorization": f"Bearer {installation_token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+
+    close_client = False
+    if client is None:
+        client = httpx.AsyncClient(timeout=20.0)
+        close_client = True
+
+    try:
+        resp = await client.get(url, headers=headers)
+        if resp.status_code != 200:
+            return []
+        data = resp.json()
+        repos = data.get("repositories") if isinstance(data, dict) else []
+        if not isinstance(repos, list):
+            return []
+        return [
+            {
+                "full_name": r.get("full_name"),
+                "name": r.get("name"),
+                "owner": (r.get("owner") or {}).get("login"),
+                "private": bool(r.get("private", False)),
+                "html_url": r.get("html_url"),
+                "description": r.get("description"),
+            }
+            for r in repos
+            if isinstance(r, dict)
+        ]
+    except Exception as exc:
+        logger.warning("Error fetching installation repositories: %s", exc)
+        return []
+    finally:
+        if close_client:
+            await client.aclose()
+
+
 def create_session_jwt(user_data: dict[str, Any]) -> str:
     """Create signed session JWT for user cookie with AES-256 encrypted user_token."""
     settings = get_settings()
     now = int(time.time())
     raw_token = user_data.get("user_token", "")
     encrypted_token = encrypt_secret(raw_token) if raw_token else ""
-    payload = {
+    payload: dict[str, Any] = {
         "sub": user_data.get("login", ""),
         "avatar_url": user_data.get("avatar_url", ""),
         "name": user_data.get("name", ""),
+        "email": user_data.get("email", ""),
+        "clerk_id": user_data.get("clerk_id", ""),
+        "github_username": user_data.get("github_username", ""),
+        "github_user_id": user_data.get("github_user_id"),
+        "auth_provider": user_data.get("auth_provider", "github"),
         "user_token": encrypted_token,
         "iat": now,
         "exp": now + 86400 * 7,  # 7 days

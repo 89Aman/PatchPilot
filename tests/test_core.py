@@ -216,9 +216,9 @@ def test_build_review_summary_card():
     assert "**Verdict:** `WARN`" in card
     assert "**Commit:** `a1b2c3d`" in card
     assert "Found 1 risk and 2 minor nits." in card
-    assert "| Bugs | 0 |" in card
-    assert "| Risks | 1 |" in card
-    assert "| Nits | 2 |" in card
+    assert "0 bugs" in card
+    assert "1 risks" in card
+    assert "2 nits" in card
 
 
 def test_get_provider_endpoint():
@@ -336,7 +336,7 @@ async def test_landing_page():
         response = await client.get("/")
         assert response.status_code == 200
         assert "PatchPilot" in response.text
-        assert "Zero Data Leakage" in response.text
+        assert "Install on GitHub" in response.text
         assert "/dashboard" in response.text
 
 
@@ -431,9 +431,9 @@ async def test_docs_and_favicon_endpoints():
         res_docs = await client.get("/docs")
         assert res_docs.status_code == 200
         assert "Documentation" in res_docs.text
-        assert "/review" in res_docs.text
-        assert "/explain" in res_docs.text
-        assert "/fix" in res_docs.text
+        assert "@patchpilot review" in res_docs.text
+        assert "@patchpilot explain" in res_docs.text
+        assert "@patchpilot fix" in res_docs.text
 
         # /documentation alias
         res_alias = await client.get("/documentation")

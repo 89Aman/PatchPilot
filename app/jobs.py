@@ -216,10 +216,21 @@ async def finalize_failure(job, state):
 
 
 async def worker():
+    last_meter_flush = 0.0
     while True:
         try:
             worked = await process_one()
         except Exception:
             log.exception("Queue poll failed")
             worked = False
+
+        now = time.time()
+        if (now - last_meter_flush) >= 30.0:
+            last_meter_flush = now
+            try:
+                from app.billing import flush_unreported_seat_events
+                await flush_unreported_seat_events(limit=25)
+            except Exception:
+                log.exception("Billing seat meter outbox flush failed")
+
         await asyncio.sleep(0 if worked else 2)
