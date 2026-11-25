@@ -45,6 +45,17 @@ class Settings(BaseSettings):
     POLAR_WEBHOOK_SECRET: str = ""
     POLAR_SERVER: str = "sandbox"
     POLAR_PRO_PRODUCT_ID: str = ""
+    POLAR_SOLO_MONTHLY_PRODUCT_ID: str = ""
+    POLAR_SOLO_ANNUAL_PRODUCT_ID: str = ""
+
+    @property
+    def solo_checkout_products(self) -> dict[str, str]:
+        if not self.BILLING_ENABLED:
+            return {}
+        return {
+            "solo_monthly": self.POLAR_SOLO_MONTHLY_PRODUCT_ID.strip(),
+            "solo_annual": self.POLAR_SOLO_ANNUAL_PRODUCT_ID.strip(),
+        }
     POLAR_METER_EVENT_NAME: str = "pr_reviewed"
     MANAGED_MONTHLY_REVIEW_CAP_PER_SEAT: int = 300
 
@@ -58,6 +69,12 @@ class Settings(BaseSettings):
     MANAGED_LLM_FALLBACK_MODEL: str = "llama-3.3-70b-versatile"
     MANAGED_LLM_FALLBACK_API_KEY: str = ""
     MANAGED_LLM_FALLBACK_BASE_URL: str = ""
+
+    # Contact & Sales intake configuration
+    CONTACT_SALES_EMAIL: str = ""
+    CONTACT_BOOKING_URL: str = ""
+    CONTACT_WEBHOOK_URL: str = ""
+    TRUSTED_PROXIES: str = "127.0.0.1,::1"
 
     HOST: str = "0.0.0.0"
     PORT: int = 8080
@@ -155,6 +172,10 @@ class Settings(BaseSettings):
     @property
     def session_secret(self) -> str:
         return self.SESSION_SECRET or self.ADMIN_API_TOKEN or self.MASTER_ENCRYPTION_KEY[:32]
+
+    @property
+    def trusted_proxies_list(self) -> set[str]:
+        return {ip.strip() for ip in self.TRUSTED_PROXIES.split(",") if ip.strip()}
 
     @field_validator("MASTER_ENCRYPTION_KEY")
     @classmethod

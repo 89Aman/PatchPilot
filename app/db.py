@@ -8,6 +8,7 @@ from sqlalchemy import (
     Boolean,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
@@ -220,6 +221,52 @@ class UserAccount(Base):
     )
 
 
+class ContactInquiry(Base):
+    """Customer contact, quote, and sales inquiry record."""
+
+    __tablename__ = "contact_inquiries"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    requested_plan: Mapped[str] = mapped_column(String(32), nullable=False)
+    routed_plan: Mapped[str] = mapped_column(String(32), nullable=False)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    email: Mapped[str] = mapped_column(String(320), nullable=False)
+    company_or_org: Mapped[str] = mapped_column(String(255), nullable=False)
+    team_size: Mapped[str] = mapped_column(String(32), nullable=False)
+    billing_cycle: Mapped[str] = mapped_column(String(16), nullable=False)
+    deployment_pref: Mapped[str] = mapped_column(String(32), nullable=False)
+    message: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="new")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+    __table_args__ = (
+        Index("idx_contact_inquiries_status_created_at", "status", created_at.desc()),
+    )
+
+
+class ContactRateLimit(Base):
+    """Shared rate-limit bucket for contact intake."""
+
+    __tablename__ = "contact_rate_limits"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    client_ip: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+        index=True,
+    )
+
+    __table_args__ = (
+        Index("idx_contact_rate_limits_client_ip_created_at", "client_ip", created_at.desc()),
+    )
+
+
 settings = get_settings()
 
 is_test = (
@@ -293,7 +340,15 @@ async def init_db() -> None:
     """Initialize PostgreSQL/Supabase database schema asynchronously."""
     global _tables_created
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+        if is_test:
+            await conn.run_sync(Base.metadata.create_all)
+        else:
+            # Exclude migration-managed tables from production create_all to enforce migration & RLS
+            managed_tables = [
+                t for t in Base.metadata.sorted_tables
+                if t.name not in {"contact_inquiries", "contact_rate_limits"}
+            ]
+            await conn.run_sync(lambda sync_conn: Base.metadata.create_all(sync_conn, tables=managed_tables))
         await conn.run_sync(_migrate_vault_columns)
     _tables_created = True
     logger.info("Database tables verified and initialized.")

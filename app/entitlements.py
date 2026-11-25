@@ -13,19 +13,25 @@ Rules:
 
 from __future__ import annotations
 
+import asyncio
+from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import logging
 from typing import Literal
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.db import ReviewUsageEvent, Workspace, WorkspaceActiveCommitter
+from app.editions import TEAM_PRODUCT_SEAT_CEILING
 
 logger = logging.getLogger("patchpilot.entitlements")
 
 ACTIVE_SUBSCRIPTION_STATUSES = {"active", "past_due"}
+PAID_PLAN_TIERS = {"pro", "team", "enterprise", "solo"}
+
+_seat_locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 
 
 def _as_utc(dt: datetime | None) -> datetime | None:
@@ -64,7 +70,8 @@ def is_workspace_subscribed(workspace: Workspace | None, now: datetime | None = 
     """Return True when the workspace holds an active paid subscription."""
     if workspace is None:
         return False
-    if workspace.plan_tier != "pro":
+    tier = (workspace.plan_tier or "").strip().lower()
+    if tier not in PAID_PLAN_TIERS:
         return False
     status_clean = (workspace.subscription_status or "").strip().lower()
     if status_clean not in ACTIVE_SUBSCRIPTION_STATUSES:
@@ -92,6 +99,47 @@ class EntitlementDecision:
     allow_fallbacks: bool
     reason_code: str
     user_message: str = ""
+
+
+async def _lock_workspace(db: AsyncSession, workspace_id: str) -> None:
+    if db.get_bind().dialect.name == "sqlite":
+        await db.execute(update(Workspace).where(Workspace.id == workspace_id).values(id=Workspace.id))
+    else:
+        await db.execute(select(Workspace.id).where(Workspace.id == workspace_id).with_for_update())
+
+
+async def admit_review(
+    db: AsyncSession, workspace: Workspace | None, *, is_private: bool,
+    github_author_id: int | None, github_author_login: str,
+    author_type: str | None = None, has_byok_key: bool = False,
+) -> EntitlementDecision:
+    """Reserve the active author's seat before admitting work across workers."""
+    reserve = (settings.BILLING_ENABLED and workspace is not None
+               and github_author_id is not None and not is_bot_author(github_author_login, author_type))
+    now = datetime.now(timezone.utc)
+    if reserve:
+        await _lock_workspace(db, workspace.id)
+    decision = await evaluate_review_entitlement(
+        db, workspace, is_private=is_private, github_author_id=github_author_id,
+        github_author_login=github_author_login, author_type=author_type,
+        has_byok_key=has_byok_key, now=now,
+    )
+    if reserve and decision.allowed:
+        period = current_billing_period(workspace, now=now)
+        exists = await db.scalar(select(WorkspaceActiveCommitter.github_author_id).where(
+            WorkspaceActiveCommitter.workspace_id == workspace.id,
+            WorkspaceActiveCommitter.billing_period == period,
+            WorkspaceActiveCommitter.github_author_id == github_author_id,
+        ))
+        if exists is None:
+            db.add(WorkspaceActiveCommitter(
+                workspace_id=workspace.id, billing_period=period, github_author_id=github_author_id,
+                github_author_login=github_author_login, review_count=0, managed_review_count=0,
+                meter_event_id=f"seat:{workspace.id}:{period}:{github_author_id}",
+                first_seen_at=now, last_seen_at=now,
+            ))
+        await db.commit()
+    return decision
 
 
 async def evaluate_review_entitlement(
@@ -164,6 +212,9 @@ async def evaluate_review_entitlement(
     author_bot = is_bot_author(github_author_login, author_type)
     existing_seat: WorkspaceActiveCommitter | None = None
 
+    tier = (workspace.plan_tier or "").strip().lower()
+    is_enterprise = tier == "enterprise"
+
     if github_author_id is not None and not author_bot:
         seat_res = await db.execute(
             select(WorkspaceActiveCommitter).where(
@@ -174,26 +225,40 @@ async def evaluate_review_entitlement(
         )
         existing_seat = seat_res.scalar_one_or_none()
 
-        if existing_seat is None and workspace.seat_cap is not None:
-            seat_count = await db.scalar(
-                select(func.count()).select_from(WorkspaceActiveCommitter).where(
-                    WorkspaceActiveCommitter.workspace_id == workspace.id,
-                    WorkspaceActiveCommitter.billing_period == period,
+        if existing_seat is None:
+            effective_cap: int | None = None if is_enterprise else TEAM_PRODUCT_SEAT_CEILING
+            if workspace.seat_cap is not None:
+                effective_cap = (
+                    min(int(workspace.seat_cap), effective_cap)
+                    if effective_cap is not None
+                    else int(workspace.seat_cap)
                 )
-            ) or 0
-            if seat_count >= int(workspace.seat_cap):
-                return EntitlementDecision(
-                    allowed=False,
-                    effective_key_mode="byok",
-                    allow_fallbacks=False,
-                    reason_code="seat_cap_reached",
-                    user_message=(
-                        "## PatchPilot Active Committer Cap Reached\n\n"
-                        f"Workspace `{workspace.github_login}` has reached its configured monthly active committer cap "
-                        f"(`{seat_count}/{workspace.seat_cap}` seats in period `{period}`).\n\n"
-                        f"A workspace admin can raise or remove the cap in Billing Settings: `{billing_link}`."
-                    ),
-                )
+
+            if effective_cap is not None:
+                seat_count = await db.scalar(
+                    select(func.count()).select_from(WorkspaceActiveCommitter).where(
+                        WorkspaceActiveCommitter.workspace_id == workspace.id,
+                        WorkspaceActiveCommitter.billing_period == period,
+                    )
+                ) or 0
+                if seat_count >= effective_cap:
+                    cap_label = (
+                        f"the {TEAM_PRODUCT_SEAT_CEILING}-developer product ceiling"
+                        if effective_cap == TEAM_PRODUCT_SEAT_CEILING and (workspace.seat_cap is None or int(workspace.seat_cap) >= TEAM_PRODUCT_SEAT_CEILING)
+                        else "its configured active committer cap"
+                    )
+                    return EntitlementDecision(
+                        allowed=False,
+                        effective_key_mode="byok",
+                        allow_fallbacks=False,
+                        reason_code="seat_cap_reached",
+                        user_message=(
+                            "## PatchPilot Active Committer Limit Reached\n\n"
+                            f"Workspace `{workspace.github_login}` has reached {cap_label} "
+                            f"(`{seat_count}/{effective_cap}` seats in period `{period}`).\n\n"
+                            f"A workspace admin can raise or adjust the cap in Billing Settings: `{billing_link}`."
+                        ),
+                    )
 
     # Resolve key mode: honor explicit workspace preference ('managed' vs 'byok')
     desired_mode = (workspace.key_mode or "managed").strip().lower()
@@ -333,54 +398,83 @@ async def record_completed_review(
     period = current_billing_period(workspace, now=ref_now)
     author_id_int = int(github_author_id)
     meter_event_id = f"seat:{workspace.id}:{period}:{author_id_int}"
-
-    res = await db.execute(
-        select(WorkspaceActiveCommitter).where(
-            WorkspaceActiveCommitter.workspace_id == workspace.id,
-            WorkspaceActiveCommitter.billing_period == period,
-            WorkspaceActiveCommitter.github_author_id == author_id_int,
-        )
-    )
-    seat = res.scalar_one_or_none()
     is_managed = key_mode == "managed"
 
-    if seat is None:
-        seat = WorkspaceActiveCommitter(
-            workspace_id=workspace.id,
-            billing_period=period,
-            github_author_id=author_id_int,
-            github_author_login=(github_author_login or "").strip() or str(author_id_int),
-            review_count=1,
-            managed_review_count=1 if is_managed else 0,
-            meter_event_id=meter_event_id,
-            meter_reported_at=None,
-            first_seen_at=ref_now,
-            last_seen_at=ref_now,
+    tier = (workspace.plan_tier or "").strip().lower()
+    is_enterprise = tier == "enterprise"
+    effective_cap: int | None = None if is_enterprise else TEAM_PRODUCT_SEAT_CEILING
+    if workspace.seat_cap is not None:
+        effective_cap = (
+            min(int(workspace.seat_cap), effective_cap)
+            if effective_cap is not None
+            else int(workspace.seat_cap)
         )
-        db.add(seat)
-        try:
+
+    async with _seat_locks[workspace.id]:
+        await _lock_workspace(db, workspace.id)
+        res = await db.execute(
+            select(WorkspaceActiveCommitter).where(
+                WorkspaceActiveCommitter.workspace_id == workspace.id,
+                WorkspaceActiveCommitter.billing_period == period,
+                WorkspaceActiveCommitter.github_author_id == author_id_int,
+            )
+        )
+        seat = res.scalar_one_or_none()
+
+        if seat is None:
+            if effective_cap is not None:
+                seat_count = await db.scalar(
+                    select(func.count()).select_from(WorkspaceActiveCommitter).where(
+                        WorkspaceActiveCommitter.workspace_id == workspace.id,
+                        WorkspaceActiveCommitter.billing_period == period,
+                    )
+                ) or 0
+                if seat_count >= effective_cap:
+                    logger.warning(
+                        "Seat cap reached for workspace %s (count=%s, cap=%s). Blocking author %s",
+                        workspace.id,
+                        seat_count,
+                        effective_cap,
+                        author_id_int,
+                    )
+                    return None
+
+            seat = WorkspaceActiveCommitter(
+                workspace_id=workspace.id,
+                billing_period=period,
+                github_author_id=author_id_int,
+                github_author_login=(github_author_login or "").strip() or str(author_id_int),
+                review_count=1,
+                managed_review_count=1 if is_managed else 0,
+                meter_event_id=meter_event_id,
+                meter_reported_at=None,
+                first_seen_at=ref_now,
+                last_seen_at=ref_now,
+            )
+            db.add(seat)
+            try:
+                await db.commit()
+                await db.refresh(seat)
+                return seat
+            except IntegrityError:
+                await db.rollback()
+                res = await db.execute(
+                    select(WorkspaceActiveCommitter).where(
+                        WorkspaceActiveCommitter.workspace_id == workspace.id,
+                        WorkspaceActiveCommitter.billing_period == period,
+                        WorkspaceActiveCommitter.github_author_id == author_id_int,
+                    )
+                )
+                seat = res.scalar_one_or_none()
+
+        if seat is not None:
+            seat.review_count += 1
+            if is_managed:
+                seat.managed_review_count += 1
+            if github_author_login:
+                seat.github_author_login = github_author_login.strip()
+            seat.last_seen_at = ref_now
             await db.commit()
             await db.refresh(seat)
-            return seat
-        except IntegrityError:
-            await db.rollback()
-            res = await db.execute(
-                select(WorkspaceActiveCommitter).where(
-                    WorkspaceActiveCommitter.workspace_id == workspace.id,
-                    WorkspaceActiveCommitter.billing_period == period,
-                    WorkspaceActiveCommitter.github_author_id == author_id_int,
-                )
-            )
-            seat = res.scalar_one_or_none()
 
-    if seat is not None:
-        seat.review_count += 1
-        if is_managed:
-            seat.managed_review_count += 1
-        if github_author_login:
-            seat.github_author_login = github_author_login.strip()
-        seat.last_seen_at = ref_now
-        await db.commit()
-        await db.refresh(seat)
-
-    return seat
+        return seat

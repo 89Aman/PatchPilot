@@ -8,7 +8,7 @@ import os
 import re
 import secrets
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 import uuid
 import httpx
 from fastapi import (
@@ -62,9 +62,11 @@ from app.db import (
     init_db,
     is_test,
 )
+from app.contact import ContactInquiryRequest, submit_contact_inquiry
+from app.editions import get_catalog_for_view
 from app.entitlements import (
     current_billing_period,
-    evaluate_review_entitlement,
+    admit_review,
     is_workspace_subscribed,
     record_completed_review,
     workspace_billing_url,
@@ -383,6 +385,8 @@ class WorkspaceBillingSettingsRequest(BaseModel):
 @app.get("/", response_class=HTMLResponse, tags=["Frontend"])
 async def root_page(request: Request):
     """Render main PatchPilot landing page."""
+    configured = settings.solo_checkout_products
+    catalog = get_catalog_for_view(cycle="monthly", configured_products=configured, managed_cap_per_seat=settings.MANAGED_MONTHLY_REVIEW_CAP_PER_SEAT)
     return templates.TemplateResponse(
         request=request,
         name="index.html",
@@ -390,6 +394,7 @@ async def root_page(request: Request):
             "app_base_url": _request_origin(request),
             "install_url": settings.github_app_install_url,
             "billing_enabled": settings.BILLING_ENABLED,
+            "catalog": catalog,
         },
     )
 
@@ -397,6 +402,13 @@ async def root_page(request: Request):
 @app.get("/pricing", response_class=HTMLResponse, tags=["Frontend"])
 async def pricing_page(request: Request):
     """Render PatchPilot pricing page."""
+    cycle = request.query_params.get("cycle", "monthly").lower()
+    if cycle not in {"monthly", "annual"}:
+        cycle = "monthly"
+    configured = settings.solo_checkout_products
+    catalog_monthly = get_catalog_for_view(cycle="monthly", configured_products=configured, managed_cap_per_seat=settings.MANAGED_MONTHLY_REVIEW_CAP_PER_SEAT)
+    catalog_annual = get_catalog_for_view(cycle="annual", configured_products=configured, managed_cap_per_seat=settings.MANAGED_MONTHLY_REVIEW_CAP_PER_SEAT)
+    catalog = catalog_annual if cycle == "annual" else catalog_monthly
     return templates.TemplateResponse(
         request=request,
         name="pricing.html",
@@ -404,6 +416,12 @@ async def pricing_page(request: Request):
             "app_base_url": _request_origin(request),
             "install_url": settings.github_app_install_url,
             "billing_enabled": settings.BILLING_ENABLED,
+            "catalog": catalog,
+            "catalog_monthly": catalog_monthly,
+            "catalog_annual": catalog_annual,
+            "selected_cycle": cycle,
+            "contact_sales_email": settings.CONTACT_SALES_EMAIL.strip(),
+            "contact_booking_url": settings.CONTACT_BOOKING_URL.strip(),
         },
     )
 
@@ -1348,6 +1366,8 @@ async def update_workspace_billing_settings(
 async def create_workspace_checkout(
     workspace_id: str,
     request: Request,
+    edition: Literal["solo", "pro"] = "pro",
+    cycle: Literal["monthly", "annual"] = "monthly",
     identity: dict[str, Any] = Depends(_require_identity),
     db: AsyncSession = Depends(get_db),
 ):
@@ -1359,7 +1379,19 @@ async def create_workspace_checkout(
     customer_ip = forwarded_for or (request.client.host if request.client else None)
 
     try:
-        billing_client = PolarBillingClient()
+        if not settings.BILLING_ENABLED:
+            raise HTTPException(409, "Hosted billing is unavailable.")
+        if edition == "solo":
+            if (ws.account_type or "").lower() != "user":
+                raise HTTPException(409, "Solo requires a personal GitHub workspace.")
+            product = settings.solo_checkout_products.get(f"solo_{cycle}")
+            if not product:
+                raise HTTPException(409, "This Solo billing cycle is unavailable.")
+            billing_client = PolarBillingClient(pro_product_id=product)
+        else:
+            if cycle != "monthly":
+                raise HTTPException(409, "This billing cycle is unavailable.")
+            billing_client = PolarBillingClient()
         checkout_url = await billing_client.create_checkout_url(
             workspace=ws,
             customer_email=ws.billing_email or identity.get("email") or None,
@@ -1391,6 +1423,33 @@ async def create_workspace_portal(
         return {"portal_url": portal_url}
     except BillingProviderError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+
+
+@app.get("/api/editions", tags=["Pricing"])
+async def get_editions_catalog(cycle: str = "monthly"):
+    """Return structured pricing catalog, decided prices, and comparison matrix."""
+    configured = settings.solo_checkout_products
+    return get_catalog_for_view(
+        cycle=cycle,
+        configured_products=configured,
+        managed_cap_per_seat=settings.MANAGED_MONTHLY_REVIEW_CAP_PER_SEAT,
+    )
+
+
+@app.post("/api/contact", tags=["Contact"])
+async def contact_sales_inquiry(
+    payload: ContactInquiryRequest,
+    request: Request,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+):
+    """Submit a contact sales or enterprise inquiry."""
+    result = await submit_contact_inquiry(payload, request, db)
+    if result.get("message") == "Inquiry received":
+        response.status_code = status.HTTP_200_OK
+    else:
+        response.status_code = status.HTTP_201_CREATED
+    return result
 
 
 # -----------------------------------------------------------------------------
@@ -1898,7 +1957,7 @@ async def handle_pr_event(payload: dict[str, Any]) -> None:
         async with SessionLocal() as ent_db:
             workspace = await resolve_workspace_for_webhook(ent_db, payload)
             byok_cfg = await _get_owner_config(owner, workspace=workspace)
-            decision = await evaluate_review_entitlement(
+            decision = await admit_review(
                 ent_db,
                 workspace,
                 is_private=is_private,
@@ -2195,7 +2254,7 @@ async def handle_comment_event(event_type: str, payload: dict[str, Any]) -> None
         async with SessionLocal() as ent_db:
             workspace = await resolve_workspace_for_webhook(ent_db, payload)
             byok_cfg = await _get_owner_config(owner, workspace=workspace)
-            decision = await evaluate_review_entitlement(
+            decision = await admit_review(
                 ent_db,
                 workspace,
                 is_private=is_private,

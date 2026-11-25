@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ page_title }} | PatchPilot</title>
+  <meta name="description" content="{{ description }}">
+  <link rel="canonical" href="{{ app_base_url }}{% if slug %}/{{ slug }}{% else %}/{% endif %}">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="PatchPilot">
+  <meta property="og:title" content="{{ page_title }} | PatchPilot">
+  <meta property="og:description" content="{{ description }}">
+  <meta property="og:url" content="{{ app_base_url }}{% if slug %}/{{ slug }}{% else %}/{% endif %}">
+  <meta property="og:image" content="{{ app_base_url }}/static/review-preview.png">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="{{ page_title }} | PatchPilot">
+  <meta name="twitter:description" content="{{ description }}">
+  <meta name="twitter:image" content="{{ app_base_url }}/static/review-preview.png">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+  <link rel="stylesheet" href="/static/theme.css">
+  <link rel="stylesheet" href="/static/landing.css">
+  {% block schema %}{% endblock %}
+  <script defer src="/static/pricing-dialog.js"></script>
+  <script defer src="/static/site-navigation.js"></script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+{% include "site-header.html" %}
+<main id="main" tabindex="-1"{% if slug %} class="guide wrap"{% endif %}>{% block article %}{% endblock %}</main>
+<footer class="bar wrap"><a href="/" class="brand">PatchPilot</a><nav aria-label="Footer navigation"><a href="/docs">Docs</a><a href="/privacy">Privacy</a><a href="/terms">Terms</a><a href="https://github.com/patchpilot/patchpilot">Source</a></nav></footer>
+</body>
+</html>

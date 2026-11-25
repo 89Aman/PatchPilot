@@ -1,0 +1,11 @@
+<header class="mast">
+  <div class="wrap mast-inner">
+    <a href="/" class="brand"><img src="/favicon.svg" alt="" width="34" height="34">PatchPilot</a>
+    <nav class="site-tabs" aria-label="Product sections">
+      {% for path, label in [('', 'Overview'), ('docs', 'Docs'), ('pricing', 'Pricing')] %}
+      <a href="/{{ path }}"{% if path == slug %} aria-current="page"{% endif %}>{{ label }}</a>
+      {% endfor %}
+    </nav>
+    <a class="app-link" href="/dashboard">Open app <span aria-hidden="true">↗</span></a>
+  </div>
+</header>

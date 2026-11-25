@@ -115,7 +115,30 @@ CREATE TABLE IF NOT EXISTS public.users (
 
 ALTER TABLE public.users ADD COLUMN IF NOT EXISTS github_user_id BIGINT;
 
--- 8. Explicit Indexes
+-- 8. Contact Inquiries (sales quotes and inquiries)
+CREATE TABLE IF NOT EXISTS public.contact_inquiries (
+    id VARCHAR(64) PRIMARY KEY,
+    requested_plan VARCHAR(32) NOT NULL,
+    routed_plan VARCHAR(32) NOT NULL,
+    name VARCHAR(200) NOT NULL,
+    email VARCHAR(320) NOT NULL,
+    company_or_org VARCHAR(255) NOT NULL,
+    team_size VARCHAR(32) NOT NULL,
+    billing_cycle VARCHAR(16) NOT NULL,
+    deployment_pref VARCHAR(32) NOT NULL,
+    message TEXT NOT NULL DEFAULT '',
+    status VARCHAR(32) NOT NULL DEFAULT 'new',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
+);
+
+-- 9. Contact Rate Limits (shared rate limit bucket)
+CREATE TABLE IF NOT EXISTS public.contact_rate_limits (
+    id BIGSERIAL PRIMARY KEY,
+    client_ip VARCHAR(128) NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
+);
+
+-- 10. Explicit Indexes
 CREATE INDEX IF NOT EXISTS idx_workspaces_login ON public.workspaces (github_login);
 CREATE INDEX IF NOT EXISTS idx_workspaces_polar_customer ON public.workspaces (polar_customer_id);
 CREATE INDEX IF NOT EXISTS idx_workspace_members_clerk_user ON public.workspace_members (clerk_user_id);
@@ -134,8 +157,12 @@ CREATE INDEX IF NOT EXISTS idx_users_login ON public.users (login);
 CREATE INDEX IF NOT EXISTS idx_users_clerk_id ON public.users (clerk_id);
 CREATE INDEX IF NOT EXISTS idx_users_github_user_id ON public.users (github_user_id);
 CREATE INDEX IF NOT EXISTS idx_users_github_username ON public.users (github_username);
+CREATE INDEX IF NOT EXISTS idx_contact_inquiries_status_created_at
+    ON public.contact_inquiries (status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_contact_rate_limits_client_ip_created_at
+    ON public.contact_rate_limits (client_ip, created_at DESC);
 
--- 9. Updated-at Triggers
+-- 11. Updated-at Triggers
 CREATE OR REPLACE FUNCTION public.handle_updated_at()
 RETURNS TRIGGER AS $$
 BEGIN
@@ -162,7 +189,7 @@ CREATE TRIGGER trigger_users_updated_at
     FOR EACH ROW
     EXECUTE FUNCTION public.handle_updated_at();
 
--- 10. Row Level Security (RLS) — lock all multi-tenant secrets & billing rows to service_role
+-- 12. Row Level Security (RLS) — lock all multi-tenant secrets & billing rows to service_role
 ALTER TABLE public.workspaces ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.workspace_members ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.workspace_active_committers ENABLE ROW LEVEL SECURITY;
@@ -170,6 +197,14 @@ ALTER TABLE public.review_usage_events ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.billing_webhook_events ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.vault_configs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.users ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.contact_inquiries ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.contact_rate_limits ENABLE ROW LEVEL SECURITY;
+
+REVOKE ALL ON public.contact_inquiries FROM anon, authenticated, public;
+GRANT ALL ON public.contact_inquiries TO service_role;
+
+REVOKE ALL ON public.contact_rate_limits FROM anon, authenticated, public;
+GRANT ALL ON public.contact_rate_limits TO service_role;
 
 DROP POLICY IF EXISTS "Allow service role full access on workspaces" ON public.workspaces;
 CREATE POLICY "Allow service role full access on workspaces"
@@ -198,3 +233,11 @@ CREATE POLICY "Allow service role full access"
 DROP POLICY IF EXISTS "Allow service role full access on users" ON public.users;
 CREATE POLICY "Allow service role full access on users"
     ON public.users FOR ALL TO service_role USING (true) WITH CHECK (true);
+
+DROP POLICY IF EXISTS "Allow service role full access on contact_inquiries" ON public.contact_inquiries;
+CREATE POLICY "Allow service role full access on contact_inquiries"
+    ON public.contact_inquiries FOR ALL TO service_role USING (true) WITH CHECK (true);
+
+DROP POLICY IF EXISTS "Allow service role full access on contact_rate_limits" ON public.contact_rate_limits;
+CREATE POLICY "Allow service role full access on contact_rate_limits"
+    ON public.contact_rate_limits FOR ALL TO service_role USING (true) WITH CHECK (true);

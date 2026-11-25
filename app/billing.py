@@ -359,6 +359,11 @@ async def process_polar_webhook(
     if period_end is not None:
         ws.current_period_end = period_end
 
+    product_id = data.get("product_id") or (data.get("product") or {}).get("id")
+    paid_tier = "solo" if product_id and product_id in settings.solo_checkout_products.values() else "pro"
+    if not product_id and ws.plan_tier == "solo":
+        paid_tier = "solo"
+
     if event_type == "subscription.revoked" or status_val in {"revoked", "unpaid", "incomplete_expired"}:
         ws.plan_tier = "unsubscribed"
         ws.subscription_status = "revoked"
@@ -370,16 +375,16 @@ async def process_polar_webhook(
             ws.plan_tier = "unsubscribed"
             ws.subscription_status = "revoked"
             ws.key_mode = "byok"
-        elif ws.plan_tier == "pro":
+        elif ws.plan_tier in {"pro", "solo"}:
             ws.subscription_status = status_val if status_val in {"active", "past_due"} else "active"
     elif event_type == "subscription.uncanceled":
         ws.cancel_at_period_end = False
-        ws.plan_tier = "pro"
+        ws.plan_tier = paid_tier
         ws.subscription_status = "active"
     elif event_type in {"subscription.active", "subscription.created", "subscription.updated"}:
         if status_val in {"active", "past_due"} or event_type == "subscription.active":
-            was_unsubscribed = ws.plan_tier != "pro"
-            ws.plan_tier = "pro"
+            was_unsubscribed = ws.plan_tier not in {"pro", "solo"}
+            ws.plan_tier = paid_tier
             ws.subscription_status = "past_due" if status_val == "past_due" else "active"
             ws.cancel_at_period_end = bool(data.get("cancel_at_period_end", False))
             # Auto-enable zero-config Managed AI upon activation if customer has not saved a BYOK key
@@ -420,6 +425,7 @@ async def flush_unreported_seat_events(
             .join(Workspace, WorkspaceActiveCommitter.workspace_id == Workspace.id)
             .where(
                 WorkspaceActiveCommitter.meter_reported_at.is_(None),
+                WorkspaceActiveCommitter.review_count > 0,
                 Workspace.plan_tier == "pro",
                 Workspace.subscription_status.in_(["active", "past_due"]),
             )

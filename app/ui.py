@@ -772,7 +772,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
 
     async function handleClerkAuth() {
-      const targetUrl = `${window.location.origin}/dashboard`;
+      const targetUrl = window.location.href;
       if (clerkInstance && typeof clerkInstance.redirectToSignIn === "function") {
         await clerkInstance.redirectToSignIn({
           signInForceRedirectUrl: targetUrl,
@@ -786,6 +786,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         return;
       }
       if (appConfig.github_oauth_configured) {
+        const selected = new URLSearchParams(location.search);
+        if (selected.get("edition") === "solo" && ["monthly", "annual"].includes(selected.get("cycle"))) {
+          sessionStorage.setItem("pp_oauth_solo_cycle", selected.get("cycle"));
+        }
         window.location.href = "/auth/login";
         return;
       }
@@ -1115,7 +1119,12 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     async function startCheckout() {
       if (!activeWorkspace) return;
       showToast("Creating Polar checkout session...", "info");
-      const res = await fetch(`/api/workspaces/${encodeURIComponent(activeWorkspace.id)}/billing/checkout`, { method: "POST" });
+      const intent = new URLSearchParams(window.location.search);
+      const query = new URLSearchParams();
+      for (const key of ["edition", "cycle"]) {
+        if (intent.has(key)) query.set(key, intent.get(key));
+      }
+      const res = await fetch(`/api/workspaces/${encodeURIComponent(activeWorkspace.id)}/billing/checkout?${query}`, { method: "POST" });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         showToast(err.detail || "Checkout unavailable", "error");
@@ -1365,6 +1374,19 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
 
     window.addEventListener("DOMContentLoaded", async () => {
+      const pageUrl = new URL(location.href);
+      const pendingCycle = sessionStorage.getItem("pp_oauth_solo_cycle");
+      sessionStorage.removeItem("pp_oauth_solo_cycle");
+      if (!pageUrl.searchParams.has("edition") && ["monthly", "annual"].includes(pendingCycle)) {
+        pageUrl.searchParams.set("edition", "solo");
+        pageUrl.searchParams.set("cycle", pendingCycle);
+        history.replaceState(null, "", pageUrl);
+      }
+      if (pageUrl.searchParams.get("edition") === "solo") {
+        const cycle = pageUrl.searchParams.get("cycle");
+        document.querySelector("#upgradeBtn span:last-child").textContent =
+          cycle === "annual" ? "Subscribe to Solo - $84/year" : "Subscribe to Solo - $9/month";
+      }
       onProviderChange();
       await loadAppConfig();
       await initClerk();
