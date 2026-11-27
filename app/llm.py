@@ -4,6 +4,7 @@ import os
 import re
 from typing import Any
 import httpx
+from app.config import get_settings
 from app.crypto import decrypt_secret
 from app.db import VaultConfig
 from app.github_auth import strip_emojis
@@ -108,8 +109,10 @@ def _excerpt_file_lines_safely(lines: list[str], budget_chars: int) -> str:
     return "\n".join(head_lines + [notice] + tail_lines)
 
 
-def annotate_diff(raw_diff: str, max_chars: int = 48_000) -> tuple[str, dict[str, set[int]]]:
+def annotate_diff(raw_diff: str, max_chars: int | None = None) -> tuple[str, dict[str, set[int]]]:
     """Parse unified diff, exclude noise files, annotate right-side line numbers, and budget across all files without mid-line cuts."""
+    if max_chars is None:
+        max_chars = get_settings().MAX_DIFF_CHARS
     valid_lines: dict[str, set[int]] = {}
     file_blocks: list[tuple[str | None, bool, list[str]]] = []
 
@@ -557,7 +560,7 @@ async def run_pr_review(
         match = re.match(r"\[L(\d+)\]", raw_line)
         if match and sanitize_diff_text(raw_line) != raw_line:
             redacted_locations.add((active_file, int(match.group(1))))
-    annotated_diff = budget_text(sanitize_diff_text(annotated_diff), 32000)
+    annotated_diff = budget_text(sanitize_diff_text(annotated_diff), get_settings().MAX_DIFF_CHARS)
     if valid_lines is not None:
         shown = visible_lines(annotated_diff)
         valid_lines = {path: lines & shown.get(path, set()) for path, lines in valid_lines.items()}

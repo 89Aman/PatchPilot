@@ -2,8 +2,15 @@
 
 from __future__ import annotations
 
+import json
+
 import httpx
 import pytest
+from pydantic import ValidationError
+
+from app import llm
+from app.config import Settings
+from app.db import VaultConfig
 from app.github_auth import (
     build_loading_review_card,
     build_review_summary_card,
@@ -14,7 +21,7 @@ from app.github_auth import (
     strip_emojis,
     update_pr_review_card,
 )
-from app.llm import annotate_diff, extract_json_payload
+from app.llm import annotate_diff, extract_json_payload, run_pr_review
 
 
 def test_build_loading_review_card_stages_and_no_emojis():
@@ -236,6 +243,45 @@ def test_strip_emojis_and_annotate_diff_no_midline_cut():
     for ln in annotated.splitlines():
         if "complete_statement_" in ln:
             assert ln.endswith("'")
+
+
+@pytest.mark.parametrize("value", ["999", "not-a-number"])
+def test_diff_budget_rejects_invalid_environment_values(monkeypatch, value):
+    monkeypatch.setenv("MAX_DIFF_CHARS", value)
+    with pytest.raises(ValidationError, match="MAX_DIFF_CHARS"):
+        Settings(_env_file=None)
+
+
+@pytest.mark.asyncio
+async def test_diff_budget_is_shared_by_annotation_and_review_prompt(monkeypatch):
+    monkeypatch.setenv("MAX_DIFF_CHARS", "1000")
+    diff = (
+        "diff --git a/file.py b/file.py\n--- a/file.py\n+++ b/file.py\n"
+        "@@ -0,0 +1,120 @@\n"
+        + "".join(f"+value_{i} = '{'x' * 40}'\n" for i in range(120))
+    )
+    sent = []
+
+    def capture(request):
+        sent.append(json.loads(request.content)["messages"][1]["content"])
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": '{"verdict":"PASS","findings":[]}'}}]},
+        )
+
+    monkeypatch.setattr(llm, "get_settings", lambda: Settings(_env_file=None), raising=False)
+    limited, _ = annotate_diff(diff)
+    explicit_budget, _ = annotate_diff(diff, max_chars=20_000)
+    assert 0 < len(limited) <= 1000 < len(explicit_budget)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(capture)) as client:
+        await run_pr_review(
+            VaultConfig(provider="ollama", model="local"), "title", "",
+            explicit_budget, client=client,
+        )
+    assert len(sent) == 1
+    rendered_diff = sent[0].split("\n```diff\n", 1)[1].removesuffix("\n```")
+    assert 0 < len(rendered_diff) <= 1000
+    assert "omitted" in rendered_diff
 
 
 def test_extract_json_payload_with_coderabbit_fields():

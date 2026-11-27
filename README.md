@@ -101,6 +101,10 @@ TESTING=1 uv run pytest -v
 TESTING=1 uv run uvicorn app.main:app --reload --port 8080
 ```
 
+Set `MAX_DIFF_CHARS` in `.env` to cap the diff text used for annotation
+and the main review prompt (default: 48,000 characters, minimum: 1,000).
+This setting does not cap the total tokens in the prompt.
+
 </details>
 
 ---

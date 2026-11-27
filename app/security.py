@@ -128,7 +128,6 @@ def sanitize_diff_text(diff_text: str, findings: list[SecretFinding] | None = No
 # PatchPilot Wallet Shield & Anti-Abuse Controls
 # -----------------------------------------------------------------------------
 
-MAX_DIFF_CHARS = 80_000
 TRUSTED_AUTHOR_ASSOCIATIONS = {"OWNER", "MEMBER", "COLLABORATOR"}
 
 
