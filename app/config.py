@@ -1,5 +1,5 @@
 from functools import lru_cache
-from pydantic import field_validator
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -28,6 +28,7 @@ class Settings(BaseSettings):
 
     HOST: str = "0.0.0.0"
     PORT: int = 8080
+    MAX_DIFF_CHARS: int = Field(default=48_000, ge=1_000)
 
     model_config = SettingsConfigDict(
         env_file=".env",
